@@ -24,8 +24,8 @@ node bin/minicodex.mjs prev
 node bin/minicodex.mjs check codex001 --since-min 180
 node bin/minicodex.mjs check codex001 --live
 node bin/minicodex.mjs login codex001
-node bin/minicodex.mjs disable codex004
-node bin/minicodex.mjs enable codex004
+node bin/minicodex.mjs disable codex001
+node bin/minicodex.mjs enable codex001
 ```
 
 启用 shim 后日常只用：
@@ -63,13 +63,13 @@ npm run setup
 - `ready`：最近可用。
 - `unknown`：本地有账号，但没确认额度。
 - `limited`：识别到额度用完；有 reset 时间就到期后自动恢复为 `unknown`。
-- `invalid_auth`：refresh token 失效，需要重新登录。
+- `invalid_auth`：refresh token 失效，需要重新登录；不会自动换下一个账号。
 - `disabled`：手动禁用。
 
 登录失效时：
 
 ```bash
-node bin/minicodex.mjs login codex004
+node bin/minicodex.mjs login codex001
 ```
 
 登录成功只代表认证恢复，不代表额度恢复，所以账号会回到 `unknown`，下次真实使用再判断。
@@ -95,10 +95,3 @@ proxy 会临时生成 shadow `CODEX_HOME/config.toml`，把 provider 指到 `127
 ```bash
 node bin/minicodex.mjs proxy off
 ```
-
-## 设计边界
-
-- 不共享、不复制 `auth.json`。
-- 不默认主动探测所有账号。
-- 不做桌面 app bind。
-- `codex-multi-auth/` 和 `multi-cli/` 不进 git。

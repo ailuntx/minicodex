@@ -752,7 +752,11 @@ async function startProxyServer(state) {
         profile.lastError = "refresh_token_invalid";
         profile.updatedAt = nowIso();
         startedState.cursor = name;
-        continue;
+        saveState(startedState);
+        const message = `账号 ${name}${profile.email ? ` <${profile.email}>` : ""} 需要重新登录：node bin/minicodex.mjs login ${name}`;
+        console.error(`minicodex: ${message}`);
+        writeJson(res, 401, { error: { message, code: "refresh_token_invalid" } });
+        return;
       }
 
       const upstreamUrl = new URL(CODEX_BACKEND_BASE_URL);
@@ -789,7 +793,13 @@ async function startProxyServer(state) {
         } else {
           profile.status = "invalid_auth";
           profile.lastError = "refresh_token_invalid";
-          console.error(`minicodex: 账号 ${name}${profile.email ? ` <${profile.email}>` : ""} 需要重新登录：node bin/minicodex.mjs login ${name}；尝试下一个账号`);
+          const message = `账号 ${name}${profile.email ? ` <${profile.email}>` : ""} 需要重新登录：node bin/minicodex.mjs login ${name}`;
+          console.error(`minicodex: ${message}`);
+          profile.updatedAt = nowIso();
+          startedState.cursor = name;
+          saveState(startedState);
+          writeJson(res, 401, { error: { message, code: "refresh_token_invalid" } });
+          return;
         }
         profile.updatedAt = nowIso();
         startedState.cursor = name;
@@ -1008,6 +1018,13 @@ async function runCodex(args, options = {}) {
   if (state.order.length === 0) abort("还没有账号。先运行 minicodex add <name> <CODEX_HOME> 或 minicodex new <name>");
 
   const codexBin = resolveRealCodex(state);
+  const command = forwardedCommand(args);
+  const currentName = state.active || state.cursor || state.lastUsed;
+  const currentProfile = currentName ? state.profiles[currentName] : null;
+  if (currentProfile?.status === "invalid_auth" && command !== "login" && command !== "logout") {
+    const email = currentProfile.email ? ` <${currentProfile.email}>` : "";
+    abort(`账号 ${currentName}${email} 需要重新登录：node bin/minicodex.mjs login ${currentName}`);
+  }
   const interactive = shouldRunInteractive(args);
   const tried = new Set();
   let lastCode = 1;
@@ -1057,7 +1074,7 @@ async function runCodex(args, options = {}) {
       } else if (scannedFailure?.type === "refresh_token_invalid") {
         state.cursor = name;
         saveState(state);
-        console.error(`minicodex: 已从 TUI 运行日志识别到 ${name}${profile.email ? ` <${profile.email}>` : ""} 需要重新登录，下次会跳过`);
+        console.error(`minicodex: 已从 TUI 运行日志识别到 ${name}${profile.email ? ` <${profile.email}>` : ""} 需要重新登录：node bin/minicodex.mjs login ${name}`);
       } else if (result.code === 0) {
         profile.status = "ready";
         profile.lastError = null;
@@ -1109,8 +1126,8 @@ async function runCodex(args, options = {}) {
       profile.updatedAt = nowIso();
       state.cursor = name;
       saveState(state);
-      console.error(`minicodex: 账号 ${name}${profile.email ? ` <${profile.email}>` : ""} 需要重新登录，尝试下一个账号`);
-      continue;
+      console.error(`minicodex: 账号 ${name}${profile.email ? ` <${profile.email}>` : ""} 需要重新登录：node bin/minicodex.mjs login ${name}`);
+      process.exit(result.code || 1);
     }
 
     process.exit(result.code);
