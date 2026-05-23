@@ -91,6 +91,26 @@ codex
 
 proxy 会临时生成 shadow `CODEX_HOME/config.toml`，把 provider 指到 `127.0.0.1` 本地代理，从 HTTP 层识别 `401/429` 和 `x-codex-primary-*` 响应头。
 
+## 接管链路
+
+`minicodex setup` 会安装 `~/.local/bin/codex` shim。这个 shim 不是负责识别状态，而是让普通 `codex` 先进入 minicodex：
+
+```text
+codex 命令
+-> ~/.local/bin/codex shim
+-> minicodex
+-> 选择账号并设置 CODEX_HOME
+-> 生成 shadow CODEX_HOME/config.toml
+-> 把 provider 指到 127.0.0.1 本地 proxy
+-> 真实 codex
+-> minicodex proxy
+-> 官方后端
+```
+
+本地 proxy 只能看到经过它的请求。没有 shim 时，真实 `codex` 会继续用自己的 `CODEX_HOME/config.toml` 直连官方后端，minicodex 就看不到 `401/429/quota headers`，也不能替账号写回 `state.json`。
+
+所以当前方案里 shim 是入口，proxy 是识别状态的位置。`limited/429` 会换下一个账号；`invalid_auth/refresh_token_reused` 会停住并提示重新登录当前账号。
+
 当前 proxy 已跑通 `codex exec`。需要临时关闭时：
 
 ```bash
