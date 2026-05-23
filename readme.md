@@ -19,14 +19,14 @@ minicodex setup
 ## 常用命令
 
 ```bash
-node bin/minicodex.mjs status
-node bin/minicodex.mjs next
-node bin/minicodex.mjs prev
-node bin/minicodex.mjs check codex001 --since-min 180
-node bin/minicodex.mjs check codex001 --live
-node bin/minicodex.mjs login codex001
-node bin/minicodex.mjs disable codex001
-node bin/minicodex.mjs enable codex001
+minicodex status
+minicodex next
+minicodex prev
+minicodex check codex001 --since-min 180
+minicodex check codex001 --live
+minicodex login codex001
+minicodex disable codex001
+minicodex enable codex001
 ```
 
 执行 `minicodex setup` 后日常只用：
@@ -70,7 +70,7 @@ minicodex setup
 登录失效时：
 
 ```bash
-node bin/minicodex.mjs login codex001
+minicodex login codex001
 ```
 
 登录成功只代表认证恢复，不代表额度恢复，所以账号会回到 `unknown`，下次真实使用再判断。
@@ -111,8 +111,23 @@ codex 命令
 
 所以当前方案里 shim 是入口，proxy 是识别状态的位置。`limited/429` 会换下一个账号；`invalid_auth/refresh_token_reused` 会停住并提示重新登录当前账号。
 
+`~/.local/bin/codex` 会排在真实 `codex` 前面。升级官方 Codex 后如果版本不对，先看：
+
+```bash
+which -a codex
+minicodex doctor
+```
+
+然后重新执行：
+
+```bash
+minicodex setup
+```
+
+这样 shim 会重新记录当前真实 `codex` 路径，避免 PATH 还指向旧版本。
+
 当前 proxy 已跑通 `codex exec`。需要临时关闭时：
 
 ```bash
-node bin/minicodex.mjs proxy off
+minicodex proxy off
 ```
