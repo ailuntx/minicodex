@@ -314,24 +314,85 @@ function splitPath(pathValue) {
   return pathValue.split(":").filter(Boolean);
 }
 
-function resolveRealCodex(state) {
-  const explicit = expandPath(process.env[REAL_CODEX_ENV] || state.realCodex || "");
+function resolveRealCodex(state, options = {}) {
+  const explicit = expandPath(process.env[REAL_CODEX_ENV] || (!options.ignoreSaved ? state.realCodex : "") || "");
   if (explicit && existsSync(explicit)) return explicit;
 
+  const candidates = codexCandidates();
+  if (options.preferNewest) {
+    const ranked = candidates
+      .map((path) => ({ path, version: codexVersion(path) }))
+      .filter((item) => item.version)
+      .sort((a, b) => compareVersions(b.version, a.version));
+    if (ranked[0]) return ranked[0].path;
+  }
+
+  return candidates[0] || abort("找不到真实 codex。可设置 MINICODEX_REAL_CODEX=/path/to/codex");
+}
+
+function codexCandidates() {
   const selfReal = safeRealpath(process.argv[1] || scriptPath);
-  const candidates = [
+  const seen = new Set();
+  const paths = [
+    ...splitPath(process.env.PATH || "").map((dir) => join(dir, "codex")),
+    ...nvmCodexCandidates(),
     "/opt/homebrew/bin/codex",
     "/usr/local/bin/codex",
     "/usr/bin/codex",
-    ...splitPath(process.env.PATH || "").map((dir) => join(dir, "codex")),
   ];
-  for (const candidate of candidates) {
+  const result = [];
+  for (const candidate of paths) {
     if (!existsSync(candidate)) continue;
     const real = safeRealpath(candidate);
-    if (real && real !== selfReal && real !== safeRealpath(scriptPath)) return candidate;
+    if (!real || seen.has(real)) continue;
+    seen.add(real);
+    if (real === selfReal || real === safeRealpath(scriptPath) || isMinicodexShim(candidate)) continue;
+    result.push(candidate);
   }
+  return result;
+}
 
-  abort("找不到真实 codex。可设置 MINICODEX_REAL_CODEX=/opt/homebrew/bin/codex");
+function nvmCodexCandidates() {
+  const root = join(homedir(), ".nvm", "versions", "node");
+  try {
+    return readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(root, entry.name, "bin", "codex"));
+  } catch {
+    return [];
+  }
+}
+
+function isMinicodexShim(path) {
+  try {
+    return readFileSync(path, "utf8").includes(SHIM_ENV);
+  } catch {
+    return false;
+  }
+}
+
+function codexVersion(path) {
+  try {
+    const result = spawnSync(path, ["--version"], {
+      encoding: "utf8",
+      timeout: 3000,
+      env: { ...process.env, [SHIM_ENV]: "", [REAL_CODEX_ENV]: "" },
+    });
+    const text = `${result.stdout || ""} ${result.stderr || ""}`;
+    return text.match(/(\d+\.\d+\.\d+)/)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function compareVersions(a, b) {
+  const left = String(a).split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const right = String(b).split(".").map((part) => Number.parseInt(part, 10) || 0);
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    const diff = (left[i] || 0) - (right[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
 }
 
 function safeRealpath(path) {
@@ -1542,7 +1603,7 @@ async function cmdLogin(args) {
 
 function cmdInstallShim() {
   const state = loadState();
-  const realCodex = resolveRealCodex(state);
+  const realCodex = resolveRealCodex(state, { ignoreSaved: true, preferNewest: true });
   state.realCodex = realCodex;
   saveState(state);
 
@@ -1573,6 +1634,30 @@ function cmdInstallShim() {
   console.log(`确认 ${binDir} 在 PATH 前面`);
 }
 
+function cmdTakeover(mode = "status") {
+  const binDir = expandPath(process.env.MINICODEX_BIN_DIR || "~/.local/bin");
+  const target = join(binDir, "codex");
+  if (mode === "on") {
+    cmdInstallShim();
+    return;
+  }
+  if (mode === "off") {
+    if (!lstatExists(target)) {
+      console.log("接管: off");
+      return;
+    }
+    if (!isMinicodexShim(target)) abort(`${target} 不是 minicodex shim，不自动处理`);
+    const dest = `${target}.minicodex.off-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    renameSync(target, dest);
+    console.log("接管: off");
+    console.log(`已停用 shim: ${target} -> ${dest}`);
+    return;
+  }
+  const active = lstatExists(target) && isMinicodexShim(target);
+  console.log(`接管: ${active ? "on" : "off"}`);
+  if (active) console.log(`shim: ${target}`);
+}
+
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
@@ -1583,8 +1668,10 @@ function cmdDoctor() {
   console.log(`state: ${statePath()}`);
   console.log(`profiles: ${state.order.length}`);
   console.log(`proxy: ${state.proxyEnabled ? "on" : "off"}`);
+  cmdTakeover("status");
   try {
     console.log(`real codex: ${resolveRealCodex(state)}`);
+    console.log(`推荐 codex: ${resolveRealCodex(state, { ignoreSaved: true, preferNewest: true })}`);
   } catch (error) {
     console.log(`real codex: ${error.message}`);
   }
@@ -1631,6 +1718,7 @@ function printHelp() {
   minicodex mark <name> <ready|unknown|limited|invalid_auth|disabled> [resetAt]
   minicodex check [name...] [--all] [--since-min N] [--live] [--fresh] [--max N] [-m model]
   minicodex proxy on|off|status
+  minicodex on|off
   minicodex setup
   minicodex login [name] [codex login args...]
   minicodex run -- <codex args...>
@@ -1702,6 +1790,12 @@ async function main() {
       break;
     case "proxy":
       cmdProxy(args);
+      break;
+    case "on":
+      cmdTakeover("on");
+      break;
+    case "off":
+      cmdTakeover("off");
       break;
     case "sessions":
     case "skills":

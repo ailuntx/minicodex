@@ -1,42 +1,47 @@
 # minicodex
 
-个人用 Codex 多账号切换工具。每个账号一个独立 `CODEX_HOME`，`auth.json` 不共享；常用数据目录可以软链到统一位置。
+个人用 Codex 多账号切换工具。每个账号一个独立 `CODEX_HOME`，`auth.json` 不共享；会话、技能、配置等目录可以软链到统一位置。
 
-## 安装
+## 使用
+
+安装：
 
 ```bash
 npm install -g @ailuntz/minicodex
 minicodex setup
 ```
 
-## 现在状态
-
-- 普通 `codex` / `codex resume`：已接管，默认走本地 proxy。
-- 账号切换：按当前账号和环形游标选择，限额或登录失效后下次跳过。
-- 状态识别：非 TUI 可直接读输出；TUI 退出后用 `check` 扫本地日志和 session，0 额外 token。
-- proxy：默认开启，会自动使用 `http_proxy/https_proxy`，识别到 `401/429` 会更新 `state.json`。
-
-## 常用命令
-
-```bash
-minicodex status
-minicodex next
-minicodex prev
-minicodex check codex001 --since-min 180
-minicodex check codex001 --live
-minicodex login codex001
-minicodex disable codex001
-minicodex enable codex001
-```
-
-执行 `minicodex setup` 后日常只用：
+`setup` 会安装 `~/.local/bin/codex` shim。之后日常直接用：
 
 ```bash
 codex
 codex resume <session-id>
 ```
 
+常用命令：
+
+```bash
+minicodex status
+minicodex next
+minicodex prev
+minicodex login codex001
+minicodex check codex001 --since-min 180
+minicodex check codex001 --live
+```
+
+接管开关：
+
+```bash
+minicodex on
+minicodex off
+minicodex doctor
+```
+
+`on` 等同于重新安装 shim；`off` 会停用 shim，让 `codex` 回到系统里的真实 Codex。
+
 ## 初始化
+
+共享目录按需设置：
 
 ```bash
 minicodex sessions ~/codex-shared/sessions
@@ -46,10 +51,7 @@ minicodex history ~/codex-shared/history.jsonl
 minicodex pets ~/codex-shared/pets
 minicodex archived_sessions ~/codex-shared/archived_sessions
 minicodex agent ~/codex-shared/agent
-minicodex setup
 ```
-
-`minicodex setup` 只负责安装 `codex` shim，让日常 `codex` 命令先进 minicodex；不会登录，也不会发模型请求。
 
 账号 home 默认在：
 
@@ -59,7 +61,7 @@ minicodex setup
 ...
 ```
 
-## 状态规则
+## 状态
 
 - `ready`：最近可用。
 - `unknown`：本地有账号，但没确认额度。
@@ -67,33 +69,35 @@ minicodex setup
 - `invalid_auth`：refresh token 失效，需要重新登录；不会自动换下一个账号。
 - `disabled`：手动禁用。
 
-登录失效时：
+规则：
+
+- `limited/429`：自动换下一个账号。
+- `invalid_auth/refresh_token_reused`：停住并提示登录当前账号。
+- `status` 和默认 `check` 不消耗 token。
+- `check --live` 会发真实请求，优先复用该账号自己的 `probeSessionId`。
+
+## 升级 Codex
+
+如果 Codex 提示升级后下次仍是旧版本，一般是多 Node/PATH 问题。先看：
 
 ```bash
-minicodex login codex001
+which -a codex
+which -a npm
+minicodex doctor
 ```
 
-登录成功只代表认证恢复，不代表额度恢复，所以账号会回到 `unknown`，下次真实使用再判断。
-
-## token 消耗
-
-- `status`：0 token。
-- `check` 默认：0 token，只读本地 `auth.json`、`models_cache.json`、日志和 session。
-- `check --live`：优先 resume 该账号自己的 `probeSessionId`；没有就新建一个探测会话并写回账号状态。
-- `check --live --fresh`：强制新建探测会话并覆盖该账号的 `probeSessionId`。
-- TUI 中正常使用的消耗来自官方 Codex 自己带的系统提示、工具、环境上下文，不是 minicodex 额外加的。
-
-## proxy
+然后重新执行：
 
 ```bash
-codex
+minicodex setup
+hash -r
 ```
 
-proxy 会临时生成 shadow `CODEX_HOME/config.toml`，把 provider 指到 `127.0.0.1` 本地代理，从 HTTP 层识别 `401/429` 和 `x-codex-primary-*` 响应头。
+`setup` 会重新扫描真实 Codex，并记录版本最高的那个，避免继续指向旧的 `/opt/homebrew/bin/codex`。
 
-## 接管链路
+## 原理
 
-`minicodex setup` 会安装 `~/.local/bin/codex` shim。这个 shim 不是负责识别状态，而是让普通 `codex` 先进入 minicodex：
+链路：
 
 ```text
 codex 命令
@@ -107,27 +111,19 @@ codex 命令
 -> 官方后端
 ```
 
-本地 proxy 只能看到经过它的请求。没有 shim 时，真实 `codex` 会继续用自己的 `CODEX_HOME/config.toml` 直连官方后端，minicodex 就看不到 `401/429/quota headers`，也不能替账号写回 `state.json`。
+本地 proxy 只能看到经过它的请求。没有 shim 时，真实 `codex` 会用自己的 `CODEX_HOME/config.toml` 直连官方后端，minicodex 看不到 `401/429/quota headers`，也不能写回 `state.json`。
 
-所以当前方案里 shim 是入口，proxy 是识别状态的位置。`limited/429` 会换下一个账号；`invalid_auth/refresh_token_reused` 会停住并提示重新登录当前账号。
-
-`~/.local/bin/codex` 会排在真实 `codex` 前面。升级官方 Codex 后如果版本不对，先看：
+## 开发
 
 ```bash
-which -a codex
-minicodex doctor
+npm run check
+node bin/minicodex.mjs --help
 ```
 
-然后重新执行：
+发布包只包含：
 
-```bash
-minicodex setup
-```
-
-这样 shim 会重新记录当前真实 `codex` 路径，避免 PATH 还指向旧版本。
-
-当前 proxy 已跑通 `codex exec`。需要临时关闭时：
-
-```bash
-minicodex proxy off
+```text
+bin/minicodex.mjs
+package.json
+readme.md
 ```
