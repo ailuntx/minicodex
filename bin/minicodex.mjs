@@ -1623,6 +1623,7 @@ function printHelp() {
   minicodex mark <name> <ready|unknown|limited|invalid_auth|disabled> [resetAt]
   minicodex check [name...] [--all] [--since-min N] [--live] [--fresh] [--max N] [-m model]
   minicodex proxy on|off|status
+  minicodex setup
   minicodex login [name] [codex login args...]
   minicodex run -- <codex args...>
   minicodex sessions <path>
@@ -1708,7 +1709,7 @@ async function main() {
         await runCodex(forwarded, { proxy: shouldUseProxyForArgs(forwarded, state) });
       }
       break;
-    case "__install-shim":
+    case "setup":
       cmdInstallShim();
       break;
     case "doctor":

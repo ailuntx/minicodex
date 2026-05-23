@@ -1,6 +1,6 @@
 {
   "name": "@ailuntz/minicodex",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "个人用 Codex 多账号切换工具",
   "type": "module",
   "bin": {
@@ -14,8 +14,7 @@
     "access": "public"
   },
   "scripts": {
-    "check": "node --check bin/minicodex.mjs",
-    "setup": "node bin/minicodex.mjs __install-shim"
+    "check": "node --check bin/minicodex.mjs"
   },
   "engines": {
     "node": ">=18"

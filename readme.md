@@ -6,6 +6,7 @@
 
 ```bash
 npm install -g @ailuntz/minicodex
+minicodex setup
 ```
 
 ## 现在状态
@@ -28,7 +29,7 @@ node bin/minicodex.mjs disable codex001
 node bin/minicodex.mjs enable codex001
 ```
 
-启用 shim 后日常只用：
+执行 `minicodex setup` 后日常只用：
 
 ```bash
 codex
@@ -38,17 +39,17 @@ codex resume <session-id>
 ## 初始化
 
 ```bash
-node bin/minicodex.mjs sessions ~/codex-shared/sessions
-node bin/minicodex.mjs skills ~/codex-shared/skills
-node bin/minicodex.mjs config ~/codex-shared/config.toml
-node bin/minicodex.mjs history ~/codex-shared/history.jsonl
-node bin/minicodex.mjs pets ~/codex-shared/pets
-node bin/minicodex.mjs archived_sessions ~/codex-shared/archived_sessions
-node bin/minicodex.mjs agent ~/codex-shared/agent
-npm run setup
+minicodex sessions ~/codex-shared/sessions
+minicodex skills ~/codex-shared/skills
+minicodex config ~/codex-shared/config.toml
+minicodex history ~/codex-shared/history.jsonl
+minicodex pets ~/codex-shared/pets
+minicodex archived_sessions ~/codex-shared/archived_sessions
+minicodex agent ~/codex-shared/agent
+minicodex setup
 ```
 
-`npm run setup` 只负责安装 `codex` shim，让日常 `codex` 命令先进 minicodex；不会登录，也不会发模型请求。
+`minicodex setup` 只负责安装 `codex` shim，让日常 `codex` 命令先进 minicodex；不会登录，也不会发模型请求。
 
 账号 home 默认在：
 
