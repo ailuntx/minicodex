@@ -23,7 +23,10 @@ import process from "node:process";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.1.0";
+const scriptPath = fileURLToPath(import.meta.url);
+const invokedName = basename(process.argv[1] ?? "");
+const rawArgs = process.argv.slice(2);
+const VERSION = readPackageVersion();
 const STATE_FILE = "state.json";
 const SHARE_TARGETS = {
   sessions: { name: "sessions", kind: "dir" },
@@ -57,10 +60,6 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
 ]);
 
-const scriptPath = fileURLToPath(import.meta.url);
-const invokedName = basename(process.argv[1] ?? "");
-const rawArgs = process.argv.slice(2);
-
 function maybeReexecWithEnvProxy() {
   const hasProxy = Boolean(process.env.https_proxy || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.HTTP_PROXY);
   if (!hasProxy || process.env.MINICODEX_ENV_PROXY_REEXEC === "1") return;
@@ -74,6 +73,15 @@ function maybeReexecWithEnvProxy() {
 }
 
 maybeReexecWithEnvProxy();
+
+function readPackageVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(join(dirname(scriptPath), "..", "package.json"), "utf8"));
+    return typeof pkg.version === "string" ? pkg.version : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
 
 function abort(message, code = 1) {
   console.error(`minicodex: ${message}`);
