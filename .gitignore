@@ -1,0 +1,7 @@
+codex-multi-auth/
+multi-cli/
+node_modules/
+.DS_Store
+dist/
+*.log
+.minicodex/
