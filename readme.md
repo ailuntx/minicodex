@@ -113,6 +113,14 @@ codex 命令
 
 本地 proxy 只能看到经过它的请求。没有 shim 时，真实 `codex` 会用自己的 `CODEX_HOME/config.toml` 直连官方后端，minicodex 看不到 `401/429/quota headers`，也不能写回 `state.json`。
 
+本地 proxy 默认监听：
+
+```text
+127.0.0.1:18087
+```
+
+可用 `MINICODEX_PROXY_PORT` 覆盖。默认端口被占用时会临时退回随机端口；如果显式设置了 `MINICODEX_PROXY_PORT`，端口被占用会直接报错。
+
 ## 开发
 
 ```bash

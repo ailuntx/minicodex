@@ -45,6 +45,7 @@ const DEFAULT_PROBE_MODEL = "gpt-5.4-mini";
 const DEFAULT_LIVE_PROBE_TIMEOUT_MS = 60_000;
 const DEFAULT_PROXY_FETCH_TIMEOUT_MS = 45_000;
 const DEFAULT_TUI_BANNER_DELAY_MS = 3000;
+const DEFAULT_PROXY_PORT = 18087;
 const PROXY_PROVIDER_ID = "minicodex-proxy";
 const CODEX_BACKEND_BASE_URL = "https://chatgpt.com/backend-api";
 const HOP_BY_HOP_HEADERS = new Set([
@@ -783,6 +784,7 @@ function prepareProxyHome(profile, proxy) {
 async function startProxyServer(state) {
   const clientKey = randomBytes(24).toString("hex");
   const debug = process.env.MINICODEX_PROXY_DEBUG === "1";
+  const preferredPort = proxyPort();
   const server = createServer(async (req, res) => {
     const startedState = loadState();
     const incomingUrl = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -904,17 +906,42 @@ async function startProxyServer(state) {
     socket.destroy();
   });
 
-  await new Promise((resolveResult, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolveResult());
-  });
+  let port = preferredPort;
+  try {
+    await listenProxyServer(server, port);
+  } catch (error) {
+    if (error?.code !== "EADDRINUSE" || process.env.MINICODEX_PROXY_PORT) throw error;
+    port = 0;
+    await listenProxyServer(server, port);
+  }
   const address = server.address();
-  const port = typeof address === "object" && address ? address.port : 0;
+  const actualPort = typeof address === "object" && address ? address.port : 0;
   return {
     clientKey,
-    baseUrl: `http://127.0.0.1:${port}`,
+    baseUrl: `http://127.0.0.1:${actualPort}`,
     close: () => new Promise((resolveResult) => server.close(() => resolveResult())),
   };
+}
+
+function proxyPort() {
+  const value = Number.parseInt(process.env.MINICODEX_PROXY_PORT || String(DEFAULT_PROXY_PORT), 10);
+  return Number.isFinite(value) && value >= 0 && value <= 65535 ? value : DEFAULT_PROXY_PORT;
+}
+
+function listenProxyServer(server, port) {
+  return new Promise((resolveResult, reject) => {
+    const onError = (error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolveResult();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, "127.0.0.1");
+  });
 }
 
 function readJsonFile(path) {
