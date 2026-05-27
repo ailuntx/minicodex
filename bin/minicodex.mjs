@@ -1650,6 +1650,7 @@ function cmdInstallShim() {
   const state = loadState();
   const realCodex = resolveRealCodex(state, { ignoreSaved: true, preferNewest: true });
   state.realCodex = realCodex;
+  state.proxyEnabled = true;
   saveState(state);
 
   const binDir = expandPath(process.env.MINICODEX_BIN_DIR || "~/.local/bin");
