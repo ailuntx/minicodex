@@ -16,11 +16,11 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import process from "node:process";
-import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -626,6 +626,7 @@ function profileAuthHeaders(profile, incomingHeaders) {
   headers.delete("x-api-key");
   headers.set("authorization", `Bearer ${accessToken}`);
   headers.set("chatgpt-account-id", accountId);
+  headers.set("accept-encoding", "identity");
   headers.set("OpenAI-Beta", "responses=experimental");
   headers.set("originator", "codex_cli_rs");
   return headers;
@@ -678,24 +679,130 @@ function responseHeadersForClient(headers) {
   return result;
 }
 
-async function requestUpstream(url, init) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), init.timeoutMs);
-  try {
-    const response = await fetch(url, {
-      method: init.method,
-      headers: init.headers,
-      body: init.body?.length ? init.body : undefined,
-      signal: controller.signal,
-    });
-    return {
-      status: response.status,
-      headers: response.headers,
-      stream: response.body ? Readable.fromWeb(response.body) : Readable.from([]),
-    };
-  } finally {
-    clearTimeout(timer);
+function nodeHeadersToHeaders(rawHeaders) {
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(rawHeaders || {})) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) headers.append(key, String(item));
+    } else {
+      headers.set(key, String(value));
+    }
   }
+  return headers;
+}
+
+function headersToObject(headers) {
+  const result = {};
+  for (const [key, value] of headers.entries()) result[key] = value;
+  return result;
+}
+
+function proxyEnvFor(url) {
+  const host = url.hostname.toLowerCase();
+  const noProxy = process.env.no_proxy || process.env.NO_PROXY || "";
+  for (const item of noProxy.split(",").map((part) => part.trim().toLowerCase()).filter(Boolean)) {
+    if (item === "*") return "";
+    const pattern = item.split("/")[0].replace(/:\d+$/, "");
+    if (!pattern) continue;
+    if (pattern.startsWith(".") && host.endsWith(pattern)) return "";
+    if (pattern.includes("*")) {
+      const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+      if (new RegExp(`^${escaped}$`).test(host)) return "";
+    }
+    if (host === pattern || host.endsWith(`.${pattern}`)) return "";
+  }
+  if (url.protocol === "https:") return process.env.https_proxy || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.HTTP_PROXY || "";
+  return process.env.http_proxy || process.env.HTTP_PROXY || "";
+}
+
+function publicProxyInfo() {
+  const raw = process.env.https_proxy || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.HTTP_PROXY || "";
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    return `${url.protocol}//${url.hostname}${url.port ? `:${url.port}` : ""}`;
+  } catch {
+    return "set";
+  }
+}
+
+function requestWithNode(url, init, socket = null) {
+  return new Promise((resolveResult, reject) => {
+    const isHttps = url.protocol === "https:";
+    const requestFn = isHttps ? httpsRequest : httpRequest;
+    const req = requestFn({
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: url.port || (isHttps ? 443 : 80),
+      path: `${url.pathname}${url.search}`,
+      method: init.method,
+      headers: headersToObject(init.headers),
+      servername: isHttps ? url.hostname : undefined,
+      createConnection: socket ? () => socket : undefined,
+    }, (res) => {
+      resolveResult({
+        status: res.statusCode || 0,
+        headers: nodeHeadersToHeaders(res.headers),
+        stream: res,
+      });
+    });
+    req.setTimeout(init.timeoutMs, () => req.destroy(new Error(`upstream timeout after ${init.timeoutMs}ms`)));
+    req.on("error", reject);
+    if (init.body?.length) req.write(init.body);
+    req.end();
+  });
+}
+
+function requestThroughHttpProxy(url, proxyRaw, init) {
+  return new Promise((resolveResult, reject) => {
+    let settled = false;
+    const done = (error, result) => {
+      if (settled) return;
+      settled = true;
+      if (error) reject(error);
+      else resolveResult(result);
+    };
+
+    let proxy;
+    try {
+      proxy = new URL(proxyRaw);
+    } catch {
+      done(new Error(`invalid proxy url: ${proxyRaw}`));
+      return;
+    }
+
+    const isProxyHttps = proxy.protocol === "https:";
+    const requestFn = isProxyHttps ? httpsRequest : httpRequest;
+    const headers = {};
+    if (proxy.username || proxy.password) {
+      headers["proxy-authorization"] = `Basic ${Buffer.from(`${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`).toString("base64")}`;
+    }
+    const connect = requestFn({
+      hostname: proxy.hostname,
+      port: proxy.port || (isProxyHttps ? 443 : 80),
+      method: "CONNECT",
+      path: `${url.hostname}:${url.port || 443}`,
+      headers,
+    });
+    connect.setTimeout(init.timeoutMs, () => connect.destroy(new Error(`proxy timeout after ${init.timeoutMs}ms`)));
+    connect.on("connect", (res, socket) => {
+      if (res.statusCode !== 200) {
+        socket.destroy();
+        done(new Error(`proxy CONNECT ${res.statusCode}`));
+        return;
+      }
+      requestWithNode(url, init, socket).then((result) => done(null, result), done);
+    });
+    connect.on("error", done);
+    connect.end();
+  });
+}
+
+async function requestUpstream(url, init) {
+  const proxy = proxyEnvFor(url);
+  if (proxy && url.protocol === "https:") return requestThroughHttpProxy(url, proxy, init);
+  return requestWithNode(url, init);
 }
 
 function readUpstreamText(upstream) {
@@ -788,6 +895,20 @@ async function startProxyServer(state) {
   const server = createServer(async (req, res) => {
     const startedState = loadState();
     const incomingUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (["/", "/health", "/healthz"].includes(incomingUrl.pathname)) {
+      writeJson(res, 200, {
+        ok: true,
+        name: "minicodex proxy",
+        version: VERSION,
+        time: nowIso(),
+        upstream: CODEX_BACKEND_BASE_URL,
+        upstreamProxy: publicProxyInfo(),
+        profiles: startedState.order.length,
+        active: startedState.active,
+        cursor: startedState.cursor,
+      });
+      return;
+    }
     const upstreamPath = upstreamPathFor(incomingUrl.pathname);
     if (debug) console.error(`minicodex proxy: ${req.method} ${incomingUrl.pathname} -> ${upstreamPath || "-"}`);
     if (!upstreamPath) {
