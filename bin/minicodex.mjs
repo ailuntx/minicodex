@@ -21,6 +21,7 @@ import { request as httpsRequest } from "node:https";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import process from "node:process";
+import { connect as tlsConnect } from "node:tls";
 import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -731,6 +732,9 @@ function requestWithNode(url, init, socket = null) {
   return new Promise((resolveResult, reject) => {
     const isHttps = url.protocol === "https:";
     const requestFn = isHttps ? httpsRequest : httpRequest;
+    const createConnection = socket
+      ? () => (isHttps ? tlsConnect({ socket, servername: url.hostname }) : socket)
+      : undefined;
     const req = requestFn({
       protocol: url.protocol,
       hostname: url.hostname,
@@ -739,7 +743,7 @@ function requestWithNode(url, init, socket = null) {
       method: init.method,
       headers: headersToObject(init.headers),
       servername: isHttps ? url.hostname : undefined,
-      createConnection: socket ? () => socket : undefined,
+      createConnection,
     }, (res) => {
       resolveResult({
         status: res.statusCode || 0,

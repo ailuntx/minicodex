@@ -1,6 +1,6 @@
 {
   "name": "@ailuntz/minicodex",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "个人用 Codex 多账号切换工具",
   "type": "module",
   "bin": {
