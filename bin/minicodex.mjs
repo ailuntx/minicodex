@@ -1003,9 +1003,23 @@ function appendBuffer(current, chunk) {
   return next.length > OUTPUT_BUFFER_LIMIT ? next.slice(-OUTPUT_BUFFER_LIMIT) : next;
 }
 
+function codexEnv(home) {
+  const env = { ...process.env, CODEX_HOME: home };
+  mirrorEnv(env, "http_proxy", "HTTP_PROXY");
+  mirrorEnv(env, "https_proxy", "HTTPS_PROXY");
+  mirrorEnv(env, "all_proxy", "ALL_PROXY");
+  mirrorEnv(env, "no_proxy", "NO_PROXY");
+  return env;
+}
+
+function mirrorEnv(env, lower, upper) {
+  if (env[lower] && !env[upper]) env[upper] = env[lower];
+  if (env[upper] && !env[lower]) env[lower] = env[upper];
+}
+
 function runCodexOnce(codexBin, profile, args, options = {}) {
   return new Promise((resolveResult) => {
-    const env = { ...process.env, CODEX_HOME: options.home || profile.home };
+    const env = codexEnv(options.home || profile.home);
     const child = spawn(codexBin, args, { stdio: ["inherit", "pipe", "pipe"], env });
     let output = "";
 
@@ -1024,7 +1038,7 @@ function runCodexOnce(codexBin, profile, args, options = {}) {
 
 function runCodexInteractive(codexBin, profile, args, options = {}) {
   return new Promise((resolveResult) => {
-    const env = { ...process.env, CODEX_HOME: options.home || profile.home };
+    const env = codexEnv(options.home || profile.home);
     const child = spawn(codexBin, args, { stdio: "inherit", env });
     child.on("error", (error) => resolveResult({ code: 1, signal: null, spawnError: error }));
     child.on("close", (code, signal) => resolveResult({ code: code ?? 1, signal }));
@@ -1078,7 +1092,7 @@ function isProxyRequestArgs(args) {
 
 function runCodexOnceWithTimeout(codexBin, profile, args, timeoutMs) {
   return new Promise((resolveResult) => {
-    const env = { ...process.env, CODEX_HOME: profile.home };
+    const env = codexEnv(profile.home);
     const child = spawn(codexBin, args, { stdio: ["ignore", "pipe", "pipe"], env });
     let output = "";
     const timer = setTimeout(() => {
