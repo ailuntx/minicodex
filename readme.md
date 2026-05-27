@@ -24,7 +24,8 @@ codex resume <session-id>
 minicodex status
 minicodex next
 minicodex prev
-minicodex login codex001
+minicodex login codex001        # 默认 device-auth
+minicodex login codex001 --browser
 minicodex check codex001 --since-min 180
 minicodex check codex001 --live
 ```
@@ -73,6 +74,7 @@ minicodex agent ~/codex-shared/agent
 
 - `limited/429`：自动换下一个账号。
 - `invalid_auth/refresh_token_reused`：停住并提示登录当前账号。
+- `minicodex login` 默认使用 `--device-auth`；需要浏览器回调时用 `--browser`。
 - `status` 和默认 `check` 不消耗 token。
 - `check --live` 会发真实请求，优先复用该账号自己的 `probeSessionId`。
 

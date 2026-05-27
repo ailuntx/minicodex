@@ -1629,7 +1629,11 @@ async function cmdLogin(args) {
   if (!targetName) abort("还没有当前账号。先运行 minicodex add/new/use");
   const profile = ensureProfile(state, targetName);
   const codexBin = resolveRealCodex(state);
-  const loginArgs = ["login", ...args.slice(hasName ? 1 : 0)];
+  const passArgs = args.slice(hasName ? 1 : 0);
+  const browser = passArgs.includes("--browser");
+  const cleanArgs = passArgs.filter((arg) => arg !== "--browser");
+  if (!browser && !cleanArgs.includes("--device-auth")) cleanArgs.unshift("--device-auth");
+  const loginArgs = ["login", ...cleanArgs];
   const result = await runCodexOnce(codexBin, profile, loginArgs);
   if (result.code === 0) {
     profile.status = "unknown";
