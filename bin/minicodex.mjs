@@ -1422,6 +1422,15 @@ function profileSummary(name, profile) {
   return `${name}${email} ${profile.status}${quota}${reset}`;
 }
 
+function quotaSummary(state) {
+  const known = state.order
+    .map((name) => state.profiles[name]?.lastQuota?.usedPercent)
+    .filter((value) => typeof value === "number" && Number.isFinite(value));
+  if (known.length === 0) return null;
+  const remaining = known.reduce((sum, used) => sum + Math.max(0, 100 - used), 0) / known.length;
+  return { known: known.length, unknown: state.order.length - known.length, remaining };
+}
+
 function cmdStatus(args = []) {
   if (args.length > 0) abort("用法：minicodex status");
   const state = loadState();
@@ -1435,33 +1444,25 @@ function cmdStatus(args = []) {
   const current = state.active || state.cursor || state.lastUsed;
   const currentProfile = current ? state.profiles[current] : null;
   const picked = pickProfile(state, new Set([current].filter(Boolean)), { preferCurrent: false });
-  const problems = state.order
-    .filter((name) => {
-      const p = state.profiles[name];
-      return p?.status === "limited" || p?.status === "invalid_auth" || p?.status === "disabled";
-    })
-    .slice(0, 8);
+  const quota = quotaSummary(state);
   const counts = {};
   for (const name of state.order) {
     const status = state.profiles[name]?.status || "unknown";
     counts[status] = (counts[status] || 0) + 1;
   }
 
-  console.log(`账号 ${state.order.length} 个，proxy=${state.proxyEnabled ? "on" : "off"}`);
+  console.log(`账号 ${state.order.length} 个，接管=${isTakeoverActive() ? "on" : "off"}`);
   console.log(`状态 ready=${counts.ready || 0} unknown=${counts.unknown || 0} limited=${counts.limited || 0} invalid_auth=${counts.invalid_auth || 0} disabled=${counts.disabled || 0}`);
+  if (quota) console.log(`已探明剩余额度 ${Math.round(quota.remaining)}% (${quota.known} 个已探明，${quota.unknown} 个未探明)`);
   if (currentProfile) console.log(`当前 ${profileSummary(current, currentProfile)}`);
   if (picked) console.log(`下个 ${profileSummary(picked.name, picked.profile)}`);
-  if (problems.length > 0) {
-    console.log("问题");
-    for (const name of problems) {
-      console.log(`  ${profileSummary(name, state.profiles[name])}`);
-    }
-    if (problems.length < state.order.filter((name) => {
-      const p = state.profiles[name];
-      return p?.status === "limited" || p?.status === "invalid_auth" || p?.status === "disabled";
-    }).length) {
-      console.log("  ...");
-    }
+  console.log("账号");
+  for (const name of state.order) {
+    const tags = [];
+    if (name === state.active) tags.push("active");
+    if (name === state.cursor) tags.push("cursor");
+    if (name === state.lastUsed) tags.push("last");
+    console.log(`  ${profileSummary(name, state.profiles[name])}${tags.length ? ` [${tags.join(",")}]` : ""}`);
   }
 }
 
@@ -1785,6 +1786,9 @@ function cmdTakeover(mode = "status") {
     return;
   }
   if (mode === "off") {
+    const state = loadState();
+    state.proxyEnabled = false;
+    saveState(state);
     if (!lstatExists(target)) {
       console.log("接管: off");
       return;
@@ -1801,6 +1805,11 @@ function cmdTakeover(mode = "status") {
   if (active) console.log(`shim: ${target}`);
 }
 
+function isTakeoverActive() {
+  const binDir = expandPath(process.env.MINICODEX_BIN_DIR || "~/.local/bin");
+  return isMinicodexShim(join(binDir, "codex"));
+}
+
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
@@ -1810,7 +1819,6 @@ function cmdDoctor() {
   console.log(`minicodex ${VERSION}`);
   console.log(`state: ${statePath()}`);
   console.log(`profiles: ${state.order.length}`);
-  console.log(`proxy: ${state.proxyEnabled ? "on" : "off"}`);
   cmdTakeover("status");
   try {
     console.log(`real codex: ${resolveRealCodex(state)}`);
@@ -1821,28 +1829,6 @@ function cmdDoctor() {
   for (const [key, value] of Object.entries(state.shared)) {
     console.log(`${key}: ${value}`);
   }
-}
-
-function cmdProxy(args) {
-  const [mode = "status"] = args;
-  const state = loadState();
-  if (["on", "enable", "enabled", "1", "true"].includes(mode)) {
-    state.proxyEnabled = true;
-    saveState(state);
-    console.log("proxy: on");
-    return;
-  }
-  if (["off", "disable", "disabled", "0", "false"].includes(mode)) {
-    state.proxyEnabled = false;
-    saveState(state);
-    console.log("proxy: off");
-    return;
-  }
-  if (["status", "show"].includes(mode)) {
-    console.log(`proxy: ${state.proxyEnabled ? "on" : "off"}`);
-    return;
-  }
-  abort("用法：minicodex proxy on|off|status");
 }
 
 function printHelp() {
@@ -1860,7 +1846,6 @@ function printHelp() {
   minicodex enable <name>
   minicodex mark <name> <ready|unknown|limited|invalid_auth|disabled> [resetAt]
   minicodex check [name...] [--all] [--since-min N] [--live] [--fresh] [--max N] [-m model]
-  minicodex proxy on|off|status
   minicodex on|off
   minicodex setup
   minicodex login [name] [codex login args...]
@@ -1930,9 +1915,6 @@ async function main() {
       break;
     case "check":
       await cmdCheck(args);
-      break;
-    case "proxy":
-      cmdProxy(args);
       break;
     case "on":
       cmdTakeover("on");

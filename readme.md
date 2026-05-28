@@ -38,7 +38,7 @@ minicodex off
 minicodex doctor
 ```
 
-`on` 等同于重新安装 shim；`off` 会停用 shim，让 `codex` 回到系统里的真实 Codex。
+`on` 会安装 shim 并开启本地 proxy；`off` 会关闭本地 proxy 并停用 shim，让 `codex` 回到系统里的真实 Codex。
 
 ## 初始化
 
