@@ -278,7 +278,7 @@ function profileRank(profile) {
 }
 
 function isUsableProfile(profile) {
-  if (!profile || profile.status === "disabled" || profile.status === "invalid_auth") return false;
+  if (!profile || profile.status === "disabled") return false;
   if (profile.status === "limited" && profile.resetAt) {
     const reset = Date.parse(profile.resetAt);
     if (Number.isFinite(reset) && reset > Date.now()) return false;
@@ -870,11 +870,7 @@ function shadowConfig(rawConfig, baseUrl, clientKey) {
 function prepareProxyHome(profile, proxy) {
   const tmpRoot = join(stateRoot(), "tmp");
   ensureDir(tmpRoot);
-  for (const entry of readdirSync(tmpRoot, { withFileTypes: true })) {
-    if (entry.isDirectory() && entry.name.startsWith("proxy-")) {
-      rmSync(join(tmpRoot, entry.name), { recursive: true, force: true });
-    }
-  }
+  cleanupProxyHomes(tmpRoot);
   const root = join(tmpRoot, `proxy-${process.pid}-${Date.now()}`);
   ensureDir(root);
   const rawConfig = existsSync(join(profile.home, "config.toml")) ? readFileSync(join(profile.home, "config.toml"), "utf8") : "";
@@ -890,6 +886,26 @@ function prepareProxyHome(profile, proxy) {
     }
   }
   return root;
+}
+
+function cleanupProxyHomes(tmpRoot) {
+  for (const entry of readdirSync(tmpRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const match = entry.name.match(/^proxy-(\d+)-/);
+    if (!match) continue;
+    if (isLivePid(Number(match[1]))) continue;
+    rmSync(join(tmpRoot, entry.name), { recursive: true, force: true });
+  }
+}
+
+function isLivePid(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function startProxyServer(state) {
@@ -942,6 +958,14 @@ async function startProxyServer(state) {
       if (!picked) break;
       const { name, profile } = picked;
       tried.add(name);
+      if (profile.status === "invalid_auth") {
+        const message = `账号 ${name}${profile.email ? ` <${profile.email}>` : ""} 需要重新登录：minicodex login ${name}`;
+        startedState.cursor = name;
+        saveState(startedState);
+        console.error(`minicodex: ${message}`);
+        writeJson(res, 401, { error: { message, code: "refresh_token_invalid" } });
+        return;
+      }
       const headers = profileAuthHeaders(profile, headersFromRequest(req));
       if (!headers) {
         profile.status = "invalid_auth";
@@ -1270,6 +1294,12 @@ async function runCodex(args, options = {}) {
     const { name } = picked;
     let profile = picked.profile;
     tried.add(name);
+    if (profile.status === "invalid_auth" && command !== "login" && command !== "logout") {
+      const email = profile.email ? ` <${profile.email}>` : "";
+      state.cursor = name;
+      saveState(state);
+      abort(`账号 ${name}${email} 需要重新登录：minicodex login ${name}`);
+    }
     profile.lastTriedAt = nowIso();
     profile.updatedAt = nowIso();
     saveState(state);
