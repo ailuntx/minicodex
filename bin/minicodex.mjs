@@ -835,77 +835,20 @@ async function forwardResponse(upstream, res) {
   upstream.stream.pipe(res);
 }
 
-function tomlString(value) {
+function tomlValue(value) {
   return `"${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-function shadowConfig(rawConfig, baseUrl, clientKey) {
-  const clean = rawConfig.replace(/\n?\[model_providers\.minicodex-proxy\][\s\S]*?(?=\n\[|$)/g, "").replace(/\s+$/, "");
-  const lines = clean ? clean.split(/\r?\n/) : [];
-  let replaced = false;
-  const output = [];
-  for (const line of lines) {
-    if (!replaced && /^\s*model_provider\s*=/.test(line)) {
-      output.push(`model_provider = ${tomlString(PROXY_PROVIDER_ID)}`);
-      replaced = true;
-      continue;
-    }
-    if (!replaced && /^\s*\[/.test(line)) {
-      output.push(`model_provider = ${tomlString(PROXY_PROVIDER_ID)}`);
-      replaced = true;
-    }
-    output.push(line);
-  }
-  if (!replaced) output.push(`model_provider = ${tomlString(PROXY_PROVIDER_ID)}`);
-  output.push("");
-  output.push(`[model_providers.${PROXY_PROVIDER_ID}]`);
-  output.push('name = "minicodex"');
-  output.push(`base_url = ${tomlString(baseUrl)}`);
-  output.push("requires_openai_auth = false");
-  output.push(`experimental_bearer_token = ${tomlString(clientKey)}`);
-  output.push('wire_api = "responses"');
-  return `${output.join("\n")}\n`;
-}
-
-function prepareProxyHome(profile, proxy) {
-  const proxyRoot = join(profile.home, ".proxy");
-  ensureDir(proxyRoot);
-  cleanupProxyHomes(proxyRoot);
-  const root = join(proxyRoot, `proxy-${process.pid}-${Date.now()}`);
-  ensureDir(root);
-  const rawConfig = existsSync(join(profile.home, "config.toml")) ? readFileSync(join(profile.home, "config.toml"), "utf8") : "";
-  writeFileSync(join(root, "config.toml"), shadowConfig(rawConfig, proxy.baseUrl, proxy.clientKey), { mode: 0o600 });
-  for (const [key, spec] of Object.entries(SHARE_TARGETS)) {
-    if (key === "config") continue;
-    const src = join(profile.home, spec.name);
-    if (!lstatExists(src)) continue;
-    try {
-      symlinkSync(src, join(root, spec.name), lstatSync(src).isDirectory() ? "dir" : "file");
-    } catch {
-      // 影子目录只是运行态配置，链接失败不阻断 TUI。
-    }
-  }
-  return root;
-}
-
-function cleanupProxyHomes(tmpRoot) {
-  for (const entry of readdirSync(tmpRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const match = entry.name.match(/^proxy-(\d+)-/);
-    if (!match) continue;
-    if (isLivePid(Number(match[1]))) continue;
-    rmSync(join(tmpRoot, entry.name), { recursive: true, force: true });
-  }
-}
-
-function isLivePid(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+function proxyConfigArgs(proxy) {
+  const base = `model_providers.${PROXY_PROVIDER_ID}`;
+  return [
+    "-c", `model_provider=${tomlValue(PROXY_PROVIDER_ID)}`,
+    "-c", `${base}.name="minicodex"`,
+    "-c", `${base}.base_url=${tomlValue(proxy.baseUrl)}`,
+    "-c", `${base}.requires_openai_auth=false`,
+    "-c", `${base}.experimental_bearer_token=${tomlValue(proxy.clientKey)}`,
+    "-c", `${base}.wire_api="responses"`,
+  ];
 }
 
 async function startProxyServer(state) {
@@ -1308,21 +1251,20 @@ async function runCodex(args, options = {}) {
     console.error(`minicodex: 使用账号 ${name}${profile.email ? ` <${profile.email}>` : ""}`);
     const scanStartMs = Date.now() - 5000;
     let proxy = null;
-    let proxyHome = null;
+    let runArgs = args;
     let result;
     try {
       if (options.proxy) {
         proxy = await startProxyServer(state);
-        proxyHome = prepareProxyHome(profile, proxy);
+        runArgs = [...proxyConfigArgs(proxy), ...args];
         console.error(`minicodex: proxy ${proxy.baseUrl}`);
       }
       if (interactive && process.stderr.isTTY) await sleep(tuiBannerDelayMs());
       result = interactive
-        ? await runCodexInteractive(codexBin, profile, args, { home: proxyHome || profile.home })
-        : await runCodexOnce(codexBin, profile, args, { home: proxyHome || profile.home });
+        ? await runCodexInteractive(codexBin, profile, runArgs)
+        : await runCodexOnce(codexBin, profile, runArgs);
     } finally {
       if (proxy) await proxy.close();
-      if (proxyHome) rmSync(proxyHome, { recursive: true, force: true });
     }
     lastCode = result.code;
 

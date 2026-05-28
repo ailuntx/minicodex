@@ -106,8 +106,7 @@ codex 命令
 -> ~/.local/bin/codex shim
 -> minicodex
 -> 选择账号并设置 CODEX_HOME
--> 生成 shadow CODEX_HOME/config.toml
--> 把 provider 指到 127.0.0.1 本地 proxy
+-> 用 -c 临时把 provider 指到 127.0.0.1 本地 proxy
 -> 真实 codex
 -> minicodex proxy
 -> 官方后端
