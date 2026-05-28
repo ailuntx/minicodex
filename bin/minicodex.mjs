@@ -868,10 +868,10 @@ function shadowConfig(rawConfig, baseUrl, clientKey) {
 }
 
 function prepareProxyHome(profile, proxy) {
-  const tmpRoot = join(stateRoot(), "tmp");
-  ensureDir(tmpRoot);
-  cleanupProxyHomes(tmpRoot);
-  const root = join(tmpRoot, `proxy-${process.pid}-${Date.now()}`);
+  const proxyRoot = join(profile.home, ".proxy");
+  ensureDir(proxyRoot);
+  cleanupProxyHomes(proxyRoot);
+  const root = join(proxyRoot, `proxy-${process.pid}-${Date.now()}`);
   ensureDir(root);
   const rawConfig = existsSync(join(profile.home, "config.toml")) ? readFileSync(join(profile.home, "config.toml"), "utf8") : "";
   writeFileSync(join(root, "config.toml"), shadowConfig(rawConfig, proxy.baseUrl, proxy.clientKey), { mode: 0o600 });
