@@ -953,7 +953,11 @@ async function startProxyServer(state) {
           profile.status = "limited";
           profile.lastError = "usage_limit";
           profile.resetAt = quota?.resetAt ?? profile.resetAt ?? null;
-          console.error(`minicodex: 账号 ${name}${profile.email ? ` <${profile.email}>` : ""} 已限额，尝试下一个账号`);
+          profile.updatedAt = nowIso();
+          startedState.cursor = name;
+          saveState(startedState);
+          forwardTextResponse(429, upstream.headers, lastBody, res);
+          return;
         } else {
           profile.status = "invalid_auth";
           profile.lastError = "refresh_token_invalid";
@@ -963,10 +967,6 @@ async function startProxyServer(state) {
           forwardTextResponse(401, upstream.headers, lastBody, res);
           return;
         }
-        profile.updatedAt = nowIso();
-        startedState.cursor = name;
-        saveState(startedState);
-        continue;
       }
 
       profile.status = "ready";
