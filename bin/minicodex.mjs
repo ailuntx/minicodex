@@ -835,6 +835,11 @@ async function forwardResponse(upstream, res) {
   upstream.stream.pipe(res);
 }
 
+function forwardTextResponse(status, headers, body, res) {
+  res.writeHead(status, responseHeadersForClient(headers));
+  res.end(body);
+}
+
 function tomlValue(value) {
   return `"${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
@@ -902,11 +907,9 @@ async function startProxyServer(state) {
       const { name, profile } = picked;
       tried.add(name);
       if (profile.status === "invalid_auth") {
-        const message = `账号 ${name}${profile.email ? ` <${profile.email}>` : ""} 需要重新登录：minicodex login ${name}`;
         startedState.cursor = name;
         saveState(startedState);
-        console.error(`minicodex: ${message}`);
-        writeJson(res, 401, { error: { message, code: "refresh_token_invalid" } });
+        writeJson(res, 401, { error: { message: "Provided authentication token is expired. Please try signing in again.", code: "token_expired" } });
         return;
       }
       const headers = profileAuthHeaders(profile, headersFromRequest(req));
@@ -916,9 +919,7 @@ async function startProxyServer(state) {
         profile.updatedAt = nowIso();
         startedState.cursor = name;
         saveState(startedState);
-        const message = `账号 ${name}${profile.email ? ` <${profile.email}>` : ""} 需要重新登录：minicodex login ${name}`;
-        console.error(`minicodex: ${message}`);
-        writeJson(res, 401, { error: { message, code: "refresh_token_invalid" } });
+        writeJson(res, 401, { error: { message: "Provided authentication token is expired. Please try signing in again.", code: "token_expired" } });
         return;
       }
 
@@ -956,12 +957,10 @@ async function startProxyServer(state) {
         } else {
           profile.status = "invalid_auth";
           profile.lastError = "refresh_token_invalid";
-          const message = `账号 ${name}${profile.email ? ` <${profile.email}>` : ""} 需要重新登录：minicodex login ${name}`;
-          console.error(`minicodex: ${message}`);
           profile.updatedAt = nowIso();
           startedState.cursor = name;
           saveState(startedState);
-          writeJson(res, 401, { error: { message, code: "refresh_token_invalid" } });
+          forwardTextResponse(401, upstream.headers, lastBody, res);
           return;
         }
         profile.updatedAt = nowIso();
@@ -1269,10 +1268,19 @@ async function runCodex(args, options = {}) {
     lastCode = result.code;
 
     if (result.spawnError) abort(`启动真实 codex 失败：${result.spawnError.message}`);
-    if (options.proxy) process.exit(result.code);
+    if (options.proxy && !interactive) process.exit(result.code);
     if (interactive) {
+      const afterRunState = loadState();
+      const afterRunProfile = afterRunState.profiles[name] || profile;
+      if (options.proxy && afterRunState.profiles[name]) Object.assign(profile, afterRunProfile);
       const findings = scanProfileArtifacts(profile, state, { sinceMs: scanStartMs });
-      const scannedFailure = findings.failure;
+      const scannedFailure = findings.failure || (
+        afterRunProfile.lastError === "usage_limit"
+          ? { type: "usage_limit", resetAt: afterRunProfile.resetAt }
+          : afterRunProfile.lastError === "refresh_token_invalid"
+            ? { type: "refresh_token_invalid" }
+            : null
+      );
       applyScanFindings(profile, findings);
       if (scannedFailure?.type === "usage_limit") {
         state.cursor = name;
