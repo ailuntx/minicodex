@@ -46,6 +46,36 @@ const DEFAULT_TUI_BANNER_DELAY_MS = 3000;
 const DEFAULT_PROXY_PORT = 18087;
 const PROXY_PROVIDER_ID = "minicodex-proxy";
 const CODEX_BACKEND_BASE_URL = "https://chatgpt.com/backend-api";
+const COMMANDS = new Set([
+  "add",
+  "status",
+  "use",
+  "next",
+  "prev",
+  "fallback",
+  "email",
+  "on",
+  "off",
+  "setup",
+  "login",
+  "logout",
+  "run",
+  "sessions",
+  "skills",
+  "config",
+  "history",
+  "pets",
+  "archived_sessions",
+  "agent",
+  "relink",
+  "doctor",
+  "version",
+  "--version",
+  "-v",
+  "help",
+  "--help",
+  "-h",
+]);
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
   "content-length",
@@ -1118,6 +1148,10 @@ function shouldUseProxyForArgs(args, state) {
   return state.proxyEnabled === true && isProxyRequestArgs(args);
 }
 
+function shouldUsePoolProxy(args) {
+  return shouldUseProxyForArgs(args, { proxyEnabled: true });
+}
+
 function isProxyRequestArgs(args) {
   if (hasHelpOrVersionArg(args)) return false;
   const command = forwardedCommand(args);
@@ -1144,12 +1178,12 @@ async function runCodex(args, options = {}) {
   const command = forwardedCommand(args);
   const currentName = state.active || state.cursor || state.lastUsed;
   const currentProfile = currentName ? state.profiles[currentName] : null;
-  if (currentProfile?.status === "invalid_auth" && command !== "login" && command !== "logout") {
+  const interactive = shouldRunInteractive(args);
+  const autoSwitch = state.autoSwitch !== false && command !== "logout";
+  if (!autoSwitch && currentProfile?.status === "invalid_auth" && command !== "login" && command !== "logout") {
     const email = currentProfile.email ? ` <${currentProfile.email}>` : "";
     abort(`账号 ${currentName}${email} 需要重新登录：minicodex login ${currentName}`);
   }
-  const interactive = shouldRunInteractive(args);
-  const autoSwitch = state.autoSwitch !== false && command !== "logout";
   const tried = new Set();
   let lastCode = 1;
 
@@ -1561,6 +1595,18 @@ function cmdInstallShim() {
   console.log("已写入 ~/.zshrc 的 codex 函数；当前终端执行 source ~/.zshrc 后生效");
 }
 
+function cmdSetup() {
+  const state = loadState();
+  state.realCodex = resolveRealCodex(state, { ignoreSaved: true, preferNewest: true });
+  state.proxyEnabled = true;
+  state.autoSwitch = true;
+  saveState(state);
+  removeShellFunction();
+  disableShim();
+  console.log("setup 完成：codex 保持主账号，minicodex 使用池账号");
+  console.log("当前终端执行 source ~/.zshrc 后生效");
+}
+
 function installShellFunction(binDir) {
   const zshrc = join(homedir(), ".zshrc");
   const begin = "# >>> minicodex >>>";
@@ -1585,6 +1631,17 @@ function installShellFunction(binDir) {
   if (next !== current) writeFileSync(zshrc, next, { mode: 0o600 });
 }
 
+function removeShellFunction() {
+  const zshrc = join(homedir(), ".zshrc");
+  if (!existsSync(zshrc)) return;
+  const begin = "# >>> minicodex >>>";
+  const end = "# <<< minicodex <<<";
+  const current = readFileSync(zshrc, "utf8");
+  const pattern = new RegExp(`\\n?${escapeRegExp(begin)}[\\s\\S]*?${escapeRegExp(end)}\\n?`, "m");
+  const next = current.replace(pattern, "\n").replace(/\n{3,}/g, "\n\n");
+  if (next !== current) writeFileSync(zshrc, next, { mode: 0o600 });
+}
+
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -1597,23 +1654,24 @@ function cmdTakeover(mode = "status") {
     return;
   }
   if (mode === "off") {
-    const state = loadState();
-    state.proxyEnabled = false;
-    saveState(state);
-    if (!lstatExists(target)) {
-      console.log("接管: off");
-      return;
-    }
-    if (!isMinicodexShim(target)) abort(`${target} 不是 minicodex shim，不自动处理`);
-    const dest = `${target}.minicodex.off-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-    renameSync(target, dest);
+    removeShellFunction();
+    disableShim();
     console.log("接管: off");
-    console.log(`已停用 shim: ${target} -> ${dest}`);
     return;
   }
   const active = lstatExists(target) && isMinicodexShim(target);
   console.log(`接管: ${active ? "on" : "off"}`);
   if (active) console.log(`shim: ${target}`);
+}
+
+function disableShim() {
+  const binDir = expandPath(process.env.MINICODEX_BIN_DIR || "~/.local/bin");
+  const target = join(binDir, "codex");
+  if (!lstatExists(target)) return;
+  if (!isMinicodexShim(target)) return;
+  const dest = `${target}.minicodex.off-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  renameSync(target, dest);
+  console.log(`已停用 shim: ${target} -> ${dest}`);
 }
 
 function isTakeoverActive() {
@@ -1646,6 +1704,7 @@ function printHelp() {
   console.log(`minicodex ${VERSION}
 
 用法:
+  minicodex [codex args...]
   minicodex add <email>
   minicodex status
   minicodex use <name>
@@ -1657,7 +1716,6 @@ function printHelp() {
   minicodex setup
   minicodex login [name] [codex login args...]
   minicodex logout [name] [codex logout args...]
-  minicodex run -- <codex args...>
   minicodex sessions <path>
   minicodex skills <path>
   minicodex config <path-or-config.toml>
@@ -1668,7 +1726,7 @@ function printHelp() {
   minicodex relink
   minicodex doctor
 
-作为 codex shim 调用时，所有参数都会转发给真实 codex。`);
+无管理命令时，minicodex 会作为池版 codex 运行。`);
 }
 
 async function main() {
@@ -1690,6 +1748,10 @@ async function main() {
 
   const cmd = rawArgs[0] ?? "";
   const args = rawArgs.slice(1);
+  if (!cmd || !COMMANDS.has(cmd)) {
+    await runCodex(rawArgs, { proxy: shouldUsePoolProxy(rawArgs) });
+    return;
+  }
   switch (cmd) {
     case "add":
       cmdAdd(args);
@@ -1739,12 +1801,11 @@ async function main() {
     case "run":
       {
         const forwarded = args[0] === "--" ? args.slice(1) : args;
-        const state = loadState();
-        await runCodex(forwarded, { proxy: shouldUseProxyForArgs(forwarded, state) });
+        await runCodex(forwarded, { proxy: shouldUsePoolProxy(forwarded) });
       }
       break;
     case "setup":
-      cmdInstallShim();
+      cmdSetup();
       break;
     case "doctor":
       cmdDoctor();

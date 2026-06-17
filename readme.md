@@ -11,11 +11,19 @@ npm install -g @ailuntz/minicodex
 minicodex setup
 ```
 
-`setup` 会安装 `~/.local/bin/codex` shim，并在 `~/.zshrc` 写入一个受管的 `codex()` 函数。当前终端执行一次 `source ~/.zshrc`，之后日常直接用：
+`setup` 会保证 `codex` 不被接管。之后：
 
 ```bash
-codex
-codex resume <session-id>
+codex                 # 主 Codex
+minicodex             # 池 Codex
+minicodex resume xxx
+minicodex exec "简单问题"
+```
+
+如果当前终端之前启用过接管，执行一次：
+
+```bash
+source ~/.zshrc
 ```
 
 常用命令：
@@ -53,7 +61,7 @@ minicodex fallback on
 
 `fallback on`：当前账号限额后自动换下一个可用账号。`fallback off`：固定当前账号，限额也停住。
 
-## 主 Codex
+## 接管模式
 
 接管开关：
 
@@ -63,7 +71,7 @@ minicodex off
 minicodex doctor
 ```
 
-`on` 会安装 shim 并开启本地 proxy；`off` 会停用 shim，让 `codex` 回到系统里的真实 Codex。`setup/on` 会维护 `~/.zshrc` 里的 minicodex 区块，不需要手动复制函数。
+默认不需要接管。`on` 会让 `codex` 也走池账号；`off/setup` 会恢复为 `codex` 主账号、`minicodex` 池账号。
 
 ## 共享目录
 
@@ -99,8 +107,7 @@ minicodex relink
 链路：
 
 ```text
-codex 命令
--> ~/.local/bin/codex shim
+minicodex 命令
 -> minicodex
 -> 选择账号并设置 CODEX_HOME
 -> 用 -c 临时把 provider 指到 127.0.0.1 本地 proxy
@@ -109,7 +116,7 @@ codex 命令
 -> 官方后端
 ```
 
-本地 proxy 只能看到经过它的请求。没有 shim 时，真实 `codex` 会用自己的 `CODEX_HOME/config.toml` 直连官方后端，minicodex 看不到 `401/429/quota headers`，也不能写回 `state.json`。
+本地 proxy 只能看到经过它的请求。普通 `codex` 是主 Codex，不经过 minicodex；池账号请用 `minicodex`。
 
 本地 proxy 默认监听 `127.0.0.1:18087`，可用 `MINICODEX_PROXY_PORT` 覆盖。
 
