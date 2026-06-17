@@ -123,6 +123,7 @@ function defaultState() {
     order: [],
     realCodex: null,
     proxyEnabled: true,
+    autoSwitch: true,
     profiles: {},
     shared: {},
   };
@@ -133,6 +134,7 @@ function normalizeState(value) {
   state.profiles = state.profiles && typeof state.profiles === "object" ? state.profiles : {};
   state.shared = state.shared && typeof state.shared === "object" ? state.shared : {};
   state.proxyEnabled = value?.proxyEnabled !== false;
+  state.autoSwitch = value?.autoSwitch !== false;
   state.order = Array.isArray(state.order) ? state.order.filter((name) => typeof name === "string") : [];
 
   for (const name of Object.keys(state.profiles)) {
@@ -279,6 +281,7 @@ function profileRank(profile) {
 
 function isUsableProfile(profile) {
   if (!profile || profile.status === "disabled") return false;
+  if (profile.status === "invalid_auth") return false;
   if (profile.status === "limited" && profile.resetAt) {
     const reset = Date.parse(profile.resetAt);
     if (Number.isFinite(reset) && reset > Date.now()) return false;
@@ -1227,11 +1230,14 @@ async function runCodex(args, options = {}) {
     abort(`账号 ${currentName}${email} 需要重新登录：minicodex login ${currentName}`);
   }
   const interactive = shouldRunInteractive(args);
+  const autoSwitch = state.autoSwitch !== false && command !== "logout";
   const tried = new Set();
   let lastCode = 1;
 
   while (tried.size < state.order.length) {
-    const picked = pickProfile(state, tried, { preferCurrent: tried.size === 0 });
+    const picked = autoSwitch
+      ? pickProfile(state, tried, { preferCurrent: tried.size === 0 })
+      : (tried.size === 0 && currentName && currentProfile ? { name: currentName, profile: currentProfile } : null);
     if (!picked) break;
     const { name } = picked;
     let profile = picked.profile;
@@ -1331,8 +1337,12 @@ async function runCodex(args, options = {}) {
       profile.updatedAt = nowIso();
       state.cursor = name;
       saveState(state);
-      console.error(`minicodex: 账号 ${name}${profile.email ? ` <${profile.email}>` : ""} 已限额，尝试下一个账号`);
-      continue;
+      if (autoSwitch) {
+        console.error(`minicodex: 账号 ${name}${profile.email ? ` <${profile.email}>` : ""} 已限额，尝试下一个账号`);
+        continue;
+      }
+      console.error(`minicodex: 账号 ${name}${profile.email ? ` <${profile.email}>` : ""} 已限额。手动切换：minicodex next；恢复自动轮换：minicodex fallback on`);
+      process.exit(result.code || 1);
     }
 
     if (failure.type === "refresh_token_invalid") {
@@ -1459,7 +1469,7 @@ function cmdStatus(args = []) {
     counts[status] = (counts[status] || 0) + 1;
   }
 
-  console.log(`账号 ${state.order.length} 个，接管=${isTakeoverActive() ? "on" : "off"}`);
+  console.log(`账号 ${state.order.length} 个，接管=${isTakeoverActive() ? "on" : "off"}，fallback=${state.autoSwitch === false ? "off" : "on"}`);
   console.log(`状态 ready=${counts.ready || 0} unknown=${counts.unknown || 0} limited=${counts.limited || 0} invalid_auth=${counts.invalid_auth || 0} disabled=${counts.disabled || 0}`);
   if (quota) console.log(`已探明剩余额度 ${Math.round(quota.remaining)}% (${quota.known} 个已探明，${quota.unknown} 个未探明)`);
   if (currentProfile) console.log(`当前 ${profileSummary(current, currentProfile)}`);
@@ -1484,8 +1494,9 @@ function cmdUse(args) {
   ensureProfile(state, name);
   state.active = name;
   state.cursor = name;
+  state.autoSwitch = false;
   saveState(state);
-  console.log(`当前账号：${name}`);
+  console.log(`当前账号：${name}，fallback=off`);
 }
 
 function cmdStep(direction) {
@@ -1500,10 +1511,11 @@ function cmdStep(direction) {
     if (!profile || profile.status === "disabled") continue;
     state.active = name;
     state.cursor = name;
+    state.autoSwitch = false;
     saveState(state);
     const email = profile.email ? ` <${profile.email}>` : "";
     const reset = profile.resetAt ? ` reset=${profile.resetAt}` : "";
-    console.log(`当前账号：${name}${email} ${profile.status}${reset}`);
+    console.log(`当前账号：${name}${email} ${profile.status}${reset}，fallback=off`);
     return;
   }
   abort("没有可切换账号");
@@ -1577,6 +1589,23 @@ function cmdShared(key, args) {
   applySharedLinks(state);
   saveState(state);
   console.log(`已设置 ${key}: ${target}`);
+}
+
+function cmdRelink(args = []) {
+  if (args.length > 0) abort("用法：minicodex relink");
+  const state = loadState();
+  applySharedLinks(state);
+  saveState(state);
+  console.log(`已重建 shared 链接：${state.order.length} 个账号`);
+}
+
+function cmdFallback(args = []) {
+  const mode = args[0] ?? "";
+  if (!["on", "off"].includes(mode) || args.length !== 1) abort("用法：minicodex fallback on|off");
+  const state = loadState();
+  state.autoSwitch = mode === "on";
+  saveState(state);
+  console.log(`fallback=${mode}`);
 }
 
 function parseCheckBaseArgs(args) {
@@ -1752,6 +1781,30 @@ async function cmdLogin(args) {
   process.exit(result.code);
 }
 
+async function cmdLogout(args) {
+  const first = args[0] ?? "";
+  const hasName = first.length > 0 && !first.startsWith("-");
+  const name = hasName ? first : "";
+  const state = loadState();
+  const targetName = name || state.active || state.cursor;
+  if (!targetName) abort("还没有当前账号。先运行 minicodex add/new/use");
+  const profile = ensureProfile(state, targetName);
+  const codexBin = resolveRealCodex(state);
+  const passArgs = args.slice(hasName ? 1 : 0);
+  const result = await runCodexOnce(codexBin, profile, ["logout", ...passArgs]);
+  if (result.code === 0) {
+    profile.status = "invalid_auth";
+    profile.lastError = "logged_out";
+    profile.resetAt = null;
+    profile.updatedAt = nowIso();
+    state.active = targetName;
+    state.cursor = targetName;
+    state.autoSwitch = false;
+    saveState(state);
+  }
+  process.exit(result.code);
+}
+
 function cmdInstallShim() {
   const state = loadState();
   const realCodex = resolveRealCodex(state, { ignoreSaved: true, preferNewest: true });
@@ -1849,6 +1902,7 @@ function printHelp() {
   minicodex use <name>
   minicodex next
   minicodex prev
+  minicodex fallback on|off
   minicodex email <name> <email>
   minicodex disable <name>
   minicodex enable <name>
@@ -1857,6 +1911,7 @@ function printHelp() {
   minicodex on|off
   minicodex setup
   minicodex login [name] [codex login args...]
+  minicodex logout [name] [codex logout args...]
   minicodex run -- <codex args...>
   minicodex sessions <path>
   minicodex skills <path>
@@ -1865,6 +1920,7 @@ function printHelp() {
   minicodex pets <path>
   minicodex archived_sessions <path>
   minicodex agent <path>
+  minicodex relink
   minicodex doctor
 
 作为 codex shim 调用时，所有参数都会转发给真实 codex。`);
@@ -1909,6 +1965,9 @@ async function main() {
     case "prev":
       cmdPrev();
       break;
+    case "fallback":
+      cmdFallback(args);
+      break;
     case "email":
       cmdSetEmail(args);
       break;
@@ -1939,8 +1998,14 @@ async function main() {
     case "agent":
       cmdShared(cmd, args);
       break;
+    case "relink":
+      cmdRelink(args);
+      break;
     case "login":
       await cmdLogin(args);
+      break;
+    case "logout":
+      await cmdLogout(args);
       break;
     case "run":
       {

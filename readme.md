@@ -1,6 +1,6 @@
 # minicodex
 
-个人用 Codex 多账号切换工具。每个账号一个独立 `CODEX_HOME`，`auth.json` 不共享；会话、技能、配置等目录可以软链到统一位置。
+个人用 Codex 多账号切换工具。每个账号一个独立 `CODEX_HOME`，`auth.json` 不共享；会话、技能、配置等可以软链到统一位置。
 
 ## 使用
 
@@ -11,7 +11,7 @@ npm install -g @ailuntz/minicodex
 minicodex setup
 ```
 
-`setup` 会安装 `~/.local/bin/codex` shim。之后日常直接用：
+`setup` 会安装 `~/.local/bin/codex` shim。确认 `~/.local/bin` 在 PATH 前面后，日常直接用：
 
 ```bash
 codex
@@ -22,13 +22,33 @@ codex resume <session-id>
 
 ```bash
 minicodex status
+minicodex use codex001
 minicodex next
 minicodex prev
-minicodex login codex001        # 默认 device-auth
+minicodex fallback on
+minicodex fallback off
+minicodex login codex001          # 默认 device-auth
 minicodex login codex001 --browser
+minicodex logout codex001
 minicodex check codex001 --since-min 180
 minicodex check codex001 --live
 ```
+
+`use/next/prev` 会进入手动模式：固定当前账号，限额也不自动跳走，方便 `logout/login`。需要自动遇到限额就换下一个时：
+
+```bash
+minicodex fallback on
+```
+
+## 主 Codex
+
+如果你想不用 minicodex 时默认进入主 home，在 shell 里设置环境变量即可：
+
+```bash
+export CODEX_HOME="/Volumes/usb_main/home/index_ailuntz/codex_macmini"
+```
+
+不要写 `alias codex='... && codex'`。它会和 shim、PATH、真实 Codex 抢同一个命令，行为容易乱。
 
 接管开关：
 
@@ -38,28 +58,26 @@ minicodex off
 minicodex doctor
 ```
 
-`on` 会安装 shim 并开启本地 proxy；`off` 会关闭本地 proxy 并停用 shim，让 `codex` 回到系统里的真实 Codex。
+`on` 会安装 shim 并开启本地 proxy；`off` 会停用 shim，让 `codex` 回到系统里的真实 Codex。
 
-## 初始化
+## 共享目录
 
-共享目录按需设置：
+按需设置：
 
 ```bash
-minicodex sessions ~/codex-shared/sessions
-minicodex skills ~/codex-shared/skills
-minicodex config ~/codex-shared/config.toml
-minicodex history ~/codex-shared/history.jsonl
-minicodex pets ~/codex-shared/pets
-minicodex archived_sessions ~/codex-shared/archived_sessions
-minicodex agent ~/codex-shared/agent
+minicodex sessions /Volumes/usb_main/home/index_ailuntz/codex_macmini/sessions
+minicodex skills /Volumes/usb_main/home/index_ailuntz/codex_macmini/skills
+minicodex config /Volumes/usb_main/home/index_ailuntz/codex_macmini/config.toml
+minicodex history /Volumes/usb_main/home/index_ailuntz/codex_macmini/history.jsonl
+minicodex pets /Volumes/usb_main/home/index_ailuntz/codex_macmini/pets
+minicodex archived_sessions /Volumes/usb_main/home/index_ailuntz/codex_macmini/archived_sessions
+minicodex agent /Volumes/usb_main/home/index_ailuntz/codex_macmini/agent
 ```
 
-账号 home 默认在：
+如果手动改了 `~/.minicodex/state.json` 里的 shared 路径，需要重建 profile 里的软链：
 
-```text
-~/.minicodex/profiles/codex001
-~/.minicodex/profiles/codex002
-...
+```bash
+minicodex relink
 ```
 
 ## 状态
@@ -70,32 +88,7 @@ minicodex agent ~/codex-shared/agent
 - `invalid_auth`：refresh token 失效，需要重新登录；不会自动换下一个账号。
 - `disabled`：手动禁用。
 
-规则：
-
-- `limited/429`：自动换下一个账号。
-- `invalid_auth/refresh_token_reused`：停住并提示登录当前账号。
-- `minicodex login` 默认使用 `--device-auth`；需要浏览器回调时用 `--browser`。
-- `status` 和默认 `check` 不消耗 token。
-- `check --live` 会发真实请求，优先复用该账号自己的 `probeSessionId`。
-
-## 升级 Codex
-
-如果 Codex 提示升级后下次仍是旧版本，一般是多 Node/PATH 问题。先看：
-
-```bash
-which -a codex
-which -a npm
-minicodex doctor
-```
-
-然后重新执行：
-
-```bash
-minicodex setup
-hash -r
-```
-
-`setup` 会重新扫描真实 Codex，并记录版本最高的那个，避免继续指向旧的 `/opt/homebrew/bin/codex`。
+`status` 和默认 `check` 不消耗 token。`check --live` 会发真实请求，优先复用该账号自己的 `probeSessionId`。
 
 ## 原理
 
@@ -114,25 +107,11 @@ codex 命令
 
 本地 proxy 只能看到经过它的请求。没有 shim 时，真实 `codex` 会用自己的 `CODEX_HOME/config.toml` 直连官方后端，minicodex 看不到 `401/429/quota headers`，也不能写回 `state.json`。
 
-本地 proxy 默认监听：
-
-```text
-127.0.0.1:18087
-```
-
-可用 `MINICODEX_PROXY_PORT` 覆盖。默认端口被占用时会临时退回随机端口；如果显式设置了 `MINICODEX_PROXY_PORT`，端口被占用会直接报错。
+本地 proxy 默认监听 `127.0.0.1:18087`，可用 `MINICODEX_PROXY_PORT` 覆盖。
 
 ## 开发
 
 ```bash
 npm run check
 node bin/minicodex.mjs --help
-```
-
-发布包只包含：
-
-```text
-bin/minicodex.mjs
-package.json
-readme.md
 ```
