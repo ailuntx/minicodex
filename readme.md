@@ -11,7 +11,7 @@ npm install -g @ailuntz/minicodex
 minicodex setup
 ```
 
-`setup` 会安装 `~/.local/bin/codex` shim。确认 `~/.local/bin` 在 PATH 前面后，日常直接用：
+`setup` 会安装 `~/.local/bin/codex` shim，并在 `~/.zshrc` 写入一个受管的 `codex()` 函数。当前终端执行一次 `source ~/.zshrc`，之后日常直接用：
 
 ```bash
 codex
@@ -63,8 +63,7 @@ minicodex off
 minicodex doctor
 ```
 
-`on` 会安装 shim 并开启本地 proxy；`off` 会停用 shim，让 `codex` 回到系统里的真实 Codex。
-如果当前终端之前跑过 `codex`，先执行 `hash -r`，再用 `type -a codex` 确认第一行是 `~/.local/bin/codex`。
+`on` 会安装 shim 并开启本地 proxy；`off` 会停用 shim，让 `codex` 回到系统里的真实 Codex。`setup/on` 会维护 `~/.zshrc` 里的 minicodex 区块，不需要手动复制函数。
 
 ## 共享目录
 

@@ -1555,10 +1555,38 @@ function cmdInstallShim() {
   ].join("\n");
   writeFileSync(target, content, { mode: 0o755 });
   chmodSync(target, 0o755);
+  installShellFunction(binDir);
   console.log(`已安装 shim: ${target}`);
   console.log(`真实 codex: ${realCodex}`);
-  console.log(`确认 ${binDir} 在 PATH 前面`);
-  console.log("当前终端如果刚运行过 codex，执行 hash -r 后再试");
+  console.log("已写入 ~/.zshrc 的 codex 函数；当前终端执行 source ~/.zshrc 后生效");
+}
+
+function installShellFunction(binDir) {
+  const zshrc = join(homedir(), ".zshrc");
+  const begin = "# >>> minicodex >>>";
+  const end = "# <<< minicodex <<<";
+  const block = [
+    begin,
+    "codex() {",
+    `    if [[ -x "${binDir}/codex" ]]; then`,
+    `        "${binDir}/codex" "$@"`,
+    "    else",
+    "        command codex \"$@\"",
+    "    fi",
+    "}",
+    end,
+    "",
+  ].join("\n");
+  const current = existsSync(zshrc) ? readFileSync(zshrc, "utf8") : "";
+  const pattern = new RegExp(`${escapeRegExp(begin)}[\\s\\S]*?${escapeRegExp(end)}\\n?`, "m");
+  const next = pattern.test(current)
+    ? current.replace(pattern, block)
+    : `${current.replace(/\s*$/, "")}\n\n${block}`;
+  if (next !== current) writeFileSync(zshrc, next, { mode: 0o600 });
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function cmdTakeover(mode = "status") {
