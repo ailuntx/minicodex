@@ -34,6 +34,19 @@ minicodex check codex001 --since-min 180
 minicodex check codex001 --live
 ```
 
+添加已经登录好的账号：
+
+```bash
+minicodex add codex109 /Users/ailuntz/.minicodex/profiles/codex109 user@example.com
+minicodex use codex109
+```
+
+只要这个 home 里已经有可用的 `auth.json`，就不需要再 `login`。如果没有登录：
+
+```bash
+minicodex login codex109
+```
+
 `use/next/prev` 会进入手动模式：固定当前账号，限额也不自动跳走，方便 `logout/login`。需要自动遇到限额就换下一个时：
 
 ```bash
@@ -41,14 +54,6 @@ minicodex fallback on
 ```
 
 ## 主 Codex
-
-如果你想不用 minicodex 时默认进入主 home，在 shell 里设置环境变量即可：
-
-```bash
-export CODEX_HOME="/Volumes/usb_main/home/index_ailuntz/codex_macmini"
-```
-
-不要写 `alias codex='... && codex'`。它会和 shim、PATH、真实 Codex 抢同一个命令，行为容易乱。
 
 接管开关：
 
