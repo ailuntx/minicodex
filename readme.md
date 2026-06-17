@@ -37,11 +37,11 @@ minicodex check codex001 --live
 添加已经登录好的账号：
 
 ```bash
-minicodex add codex109 /Users/ailuntz/.minicodex/profiles/codex109 user@example.com
+minicodex add user@example.com
 minicodex use codex109
 ```
 
-只要这个 home 里已经有可用的 `auth.json`，就不需要再 `login`。如果没有登录：
+`add 邮箱` 会自动取下一个 `codexNNN` 并打印出来，home 放在 `~/.minicodex/profiles/codexNNN`。只要这个 home 里已经有可用的 `auth.json`，就不需要再 `login`。如果没有登录：
 
 ```bash
 minicodex login codex109
@@ -52,6 +52,8 @@ minicodex login codex109
 ```bash
 minicodex fallback on
 ```
+
+`fallback on`：当前账号限额后自动换下一个可用账号。`fallback off`：固定当前账号，限额也停住。
 
 ## 主 Codex
 

@@ -1397,11 +1397,40 @@ function cmdNew(args) {
   console.log(`已创建账号 ${name}: ${home}`);
 }
 
+function looksLikeEmail(value) {
+  return typeof value === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function nextProfileName(state) {
+  let max = 0;
+  let width = 3;
+  for (const name of state.order) {
+    const match = /^codex(\d+)$/.exec(name);
+    if (!match) continue;
+    max = Math.max(max, Number(match[1]));
+    width = Math.max(width, match[1].length);
+  }
+  return `codex${String(max + 1).padStart(width, "0")}`;
+}
+
 function cmdAdd(args) {
-  const [name, homeArg, email = ""] = args;
-  validateName(name);
-  if (!homeArg) abort("用法：minicodex add <name> <CODEX_HOME> [email]");
   const state = loadState();
+  let name = args[0] ?? "";
+  let homeArg = args[1] ?? "";
+  let email = args[2] ?? "";
+
+  if (args.length === 1 && looksLikeEmail(args[0])) {
+    email = args[0];
+    name = nextProfileName(state);
+    homeArg = join(stateRoot(), "profiles", name);
+  } else if (args.length === 1) {
+    homeArg = join(stateRoot(), "profiles", name);
+  } else if (args.length === 2 && looksLikeEmail(args[1])) {
+    email = args[1];
+    homeArg = join(stateRoot(), "profiles", name);
+  }
+
+  validateName(name);
   if (state.profiles[name]) abort(`账号已存在：${name}`);
   const home = expandPath(homeArg);
   ensureDir(home);
@@ -1419,7 +1448,7 @@ function cmdAdd(args) {
   state.cursor ??= name;
   applySharedLinks(state, [name]);
   saveState(state);
-  console.log(`已导入账号 ${name}: ${home}`);
+  console.log(`已导入账号 ${name}${email ? ` <${email}>` : ""}: ${home}`);
 }
 
 function shortReset(value) {
@@ -1897,7 +1926,8 @@ function printHelp() {
 
 用法:
   minicodex new <name> [home]
-  minicodex add <name> <CODEX_HOME> [email]
+  minicodex add <email>
+  minicodex add <name> [CODEX_HOME] [email]
   minicodex status
   minicodex use <name>
   minicodex next
