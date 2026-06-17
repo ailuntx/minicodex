@@ -1558,6 +1558,7 @@ function cmdInstallShim() {
   console.log(`已安装 shim: ${target}`);
   console.log(`真实 codex: ${realCodex}`);
   console.log(`确认 ${binDir} 在 PATH 前面`);
+  console.log("当前终端如果刚运行过 codex，执行 hash -r 后再试");
 }
 
 function cmdTakeover(mode = "status") {

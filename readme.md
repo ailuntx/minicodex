@@ -64,6 +64,7 @@ minicodex doctor
 ```
 
 `on` 会安装 shim 并开启本地 proxy；`off` 会停用 shim，让 `codex` 回到系统里的真实 Codex。
+如果当前终端之前跑过 `codex`，先执行 `hash -r`，再用 `type -a codex` 确认第一行是 `~/.local/bin/codex`。
 
 ## 共享目录
 
