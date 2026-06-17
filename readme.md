@@ -30,21 +30,19 @@ minicodex fallback off
 minicodex login codex001          # 默认 device-auth
 minicodex login codex001 --browser
 minicodex logout codex001
-minicodex check codex001 --since-min 180
-minicodex check codex001 --live
 ```
 
 添加已经登录好的账号：
 
 ```bash
 minicodex add user@example.com
-minicodex use codex109
+minicodex use codex109   # 换成 add 打印出来的名字
 ```
 
 `add 邮箱` 会自动取下一个 `codexNNN` 并打印出来，home 放在 `~/.minicodex/profiles/codexNNN`。只要这个 home 里已经有可用的 `auth.json`，就不需要再 `login`。如果没有登录：
 
 ```bash
-minicodex login codex109
+minicodex login codex109 # 换成 add 打印出来的名字
 ```
 
 `use/next/prev` 会进入手动模式：固定当前账号，限额也不自动跳走，方便 `logout/login`。需要自动遇到限额就换下一个时：
@@ -93,9 +91,8 @@ minicodex relink
 - `unknown`：本地有账号，但没确认额度。
 - `limited`：识别到额度用完；有 reset 时间就到期后自动恢复为 `unknown`。
 - `invalid_auth`：refresh token 失效，需要重新登录；不会自动换下一个账号。
-- `disabled`：手动禁用。
 
-`status` 和默认 `check` 不消耗 token。`check --live` 会发真实请求，优先复用该账号自己的 `probeSessionId`。
+`status` 不消耗 token。限额和登录失效主要在真实运行时通过 proxy/header/日志识别。
 
 ## 原理
 

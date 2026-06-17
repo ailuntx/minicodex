@@ -12,7 +12,6 @@ import {
   realpathSync,
   renameSync,
   rmSync,
-  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -38,12 +37,10 @@ const SHARE_TARGETS = {
   archived_sessions: { name: "archived_sessions", kind: "dir" },
   agent: { name: "agent", kind: "dir" },
 };
-const STATUSES = new Set(["ready", "unknown", "limited", "invalid_auth", "disabled"]);
+const STATUSES = new Set(["ready", "unknown", "limited", "invalid_auth"]);
 const REAL_CODEX_ENV = "MINICODEX_REAL_CODEX";
 const SHIM_ENV = "MINICODEX_AS_CODEX";
 const OUTPUT_BUFFER_LIMIT = 64 * 1024;
-const DEFAULT_PROBE_MODEL = "gpt-5.4-mini";
-const DEFAULT_LIVE_PROBE_TIMEOUT_MS = 60_000;
 const DEFAULT_PROXY_FETCH_TIMEOUT_MS = 45_000;
 const DEFAULT_TUI_BANNER_DELAY_MS = 3000;
 const DEFAULT_PROXY_PORT = 18087;
@@ -148,8 +145,6 @@ function normalizeState(value) {
       resetAt: profile.resetAt ?? null,
       lastError: profile.lastError ?? null,
       lastQuota: profile.lastQuota ?? null,
-      probeSessionId: typeof profile.probeSessionId === "string" ? profile.probeSessionId : null,
-      probeSessionAt: profile.probeSessionAt ?? null,
       lastSuccessAt: profile.lastSuccessAt ?? null,
       lastTriedAt: profile.lastTriedAt ?? null,
       createdAt: profile.createdAt ?? nowIso(),
@@ -182,12 +177,6 @@ function saveState(state) {
   const tmp = `${path}.tmp-${process.pid}`;
   writeFileSync(tmp, `${JSON.stringify(normalizeState(state), null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, path);
-}
-
-function validateName(name) {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name ?? "")) {
-    abort("账号名只能包含字母、数字、下划线、短横线，并且必须以字母或数字开头");
-  }
 }
 
 function ensureProfile(state, name) {
@@ -272,15 +261,8 @@ function clearExpiredLimits(state) {
   }
 }
 
-function profileRank(profile) {
-  if (profile.status === "ready") return 0;
-  if (profile.status === "unknown") return 1;
-  if (profile.status === "limited") return 2;
-  return 9;
-}
-
 function isUsableProfile(profile) {
-  if (!profile || profile.status === "disabled") return false;
+  if (!profile) return false;
   if (profile.status === "invalid_auth") return false;
   if (profile.status === "limited" && profile.resetAt) {
     const reset = Date.parse(profile.resetAt);
@@ -1046,43 +1028,6 @@ function readJsonFile(path) {
   }
 }
 
-function formatAge(iso) {
-  if (!iso) return "-";
-  const ms = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(ms) || ms < 0) return iso;
-  const minutes = Math.floor(ms / 60_000);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
-
-function inspectLocalProfile(profile) {
-  const authPath = join(profile.home, "auth.json");
-  const modelsPath = join(profile.home, "models_cache.json");
-  const auth = existsSync(authPath) ? readJsonFile(authPath) : null;
-  const models = existsSync(modelsPath) ? readJsonFile(modelsPath) : null;
-  const mode = existsSync(authPath) ? statSync(authPath).mode & 0o777 : null;
-  const reasons = [];
-
-  if (!auth) reasons.push("missing-auth");
-  if (auth && auth.auth_mode !== "chatgpt") reasons.push("auth-mode");
-  if (mode !== null && mode !== 0o600) reasons.push(`auth-mode-${mode.toString(8)}`);
-  if (!auth?.tokens?.refresh_token) reasons.push("missing-refresh-token");
-  if (!auth?.tokens?.access_token) reasons.push("missing-access-token");
-  if (!models?.models?.length) reasons.push("missing-model-cache");
-  if (profile.status === "limited") reasons.push("marked-limited");
-  if (profile.status === "invalid_auth") reasons.push("marked-invalid-auth");
-
-  return {
-    ok: reasons.length === 0,
-    reasons,
-    lastRefresh: auth?.last_refresh ?? null,
-    modelCacheAt: models?.fetched_at ?? null,
-    modelCount: Array.isArray(models?.models) ? models.models.length : 0,
-  };
-}
-
 function parseResetAt(text) {
   const match = text.match(/try again at\s+([^.\n\r]+)/i);
   if (!match) return null;
@@ -1184,32 +1129,6 @@ function isProxyRequestArgs(args) {
   return true;
 }
 
-function runCodexOnceWithTimeout(codexBin, profile, args, timeoutMs) {
-  return new Promise((resolveResult) => {
-    const env = codexEnv(profile.home);
-    const child = spawn(codexBin, args, { stdio: ["ignore", "pipe", "pipe"], env });
-    let output = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-    }, timeoutMs);
-
-    child.stdout.on("data", (chunk) => {
-      output = appendBuffer(output, chunk.toString("utf8"));
-    });
-    child.stderr.on("data", (chunk) => {
-      output = appendBuffer(output, chunk.toString("utf8"));
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      resolveResult({ code: 1, signal: null, output, spawnError: error });
-    });
-    child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      resolveResult({ code: code ?? 1, signal, output });
-    });
-  });
-}
-
 function tuiBannerDelayMs() {
   const raw = process.env.MINICODEX_TUI_DELAY_MS;
   if (raw === undefined) return DEFAULT_TUI_BANNER_DELAY_MS;
@@ -1219,7 +1138,7 @@ function tuiBannerDelayMs() {
 
 async function runCodex(args, options = {}) {
   const state = loadState();
-  if (state.order.length === 0) abort("还没有账号。先运行 minicodex add <name> <CODEX_HOME> 或 minicodex new <name>");
+  if (state.order.length === 0) abort("还没有账号。先运行 minicodex add <email>");
 
   const codexBin = resolveRealCodex(state);
   const command = forwardedCommand(args);
@@ -1373,30 +1292,6 @@ function printUnavailableSummary(state) {
   }
 }
 
-function cmdNew(args) {
-  const [name, homeArg] = args;
-  validateName(name);
-  const state = loadState();
-  if (state.profiles[name]) abort(`账号已存在：${name}`);
-  const home = expandPath(homeArg || join(stateRoot(), "profiles", name));
-  ensureDir(home);
-  state.profiles[name] = {
-    home,
-    email: "",
-    status: "unknown",
-    resetAt: null,
-    lastError: null,
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
-  };
-  state.order.push(name);
-  state.active ??= name;
-  state.cursor ??= name;
-  applySharedLinks(state, [name]);
-  saveState(state);
-  console.log(`已创建账号 ${name}: ${home}`);
-}
-
 function looksLikeEmail(value) {
   return typeof value === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
@@ -1414,25 +1309,12 @@ function nextProfileName(state) {
 }
 
 function cmdAdd(args) {
+  if (args.length !== 1 || !looksLikeEmail(args[0])) abort("用法：minicodex add <email>");
   const state = loadState();
-  let name = args[0] ?? "";
-  let homeArg = args[1] ?? "";
-  let email = args[2] ?? "";
-
-  if (args.length === 1 && looksLikeEmail(args[0])) {
-    email = args[0];
-    name = nextProfileName(state);
-    homeArg = join(stateRoot(), "profiles", name);
-  } else if (args.length === 1) {
-    homeArg = join(stateRoot(), "profiles", name);
-  } else if (args.length === 2 && looksLikeEmail(args[1])) {
-    email = args[1];
-    homeArg = join(stateRoot(), "profiles", name);
-  }
-
-  validateName(name);
+  const email = args[0];
+  const name = nextProfileName(state);
   if (state.profiles[name]) abort(`账号已存在：${name}`);
-  const home = expandPath(homeArg);
+  const home = join(stateRoot(), "profiles", name);
   ensureDir(home);
   state.profiles[name] = {
     home,
@@ -1499,7 +1381,7 @@ function cmdStatus(args = []) {
   }
 
   console.log(`账号 ${state.order.length} 个，接管=${isTakeoverActive() ? "on" : "off"}，fallback=${state.autoSwitch === false ? "off" : "on"}`);
-  console.log(`状态 ready=${counts.ready || 0} unknown=${counts.unknown || 0} limited=${counts.limited || 0} invalid_auth=${counts.invalid_auth || 0} disabled=${counts.disabled || 0}`);
+  console.log(`状态 ready=${counts.ready || 0} unknown=${counts.unknown || 0} limited=${counts.limited || 0} invalid_auth=${counts.invalid_auth || 0}`);
   if (quota) console.log(`已探明剩余额度 ${Math.round(quota.remaining)}% (${quota.known} 个已探明，${quota.unknown} 个未探明)`);
   if (currentProfile) console.log(`当前 ${profileSummary(current, currentProfile)}`);
   if (picked) console.log(`下个 ${profileSummary(picked.name, picked.profile)}`);
@@ -1511,10 +1393,6 @@ function cmdStatus(args = []) {
     if (name === state.lastUsed) tags.push("last");
     console.log(`  ${profileSummary(name, state.profiles[name])}${tags.length ? ` [${tags.join(",")}]` : ""}`);
   }
-}
-
-function cmdList(args = []) {
-  cmdStatus(args);
 }
 
 function cmdUse(args) {
@@ -1530,14 +1408,14 @@ function cmdUse(args) {
 
 function cmdStep(direction) {
   const state = loadState();
-  if (state.order.length === 0) abort("还没有账号。先运行 minicodex add/new");
+  if (state.order.length === 0) abort("还没有账号。先运行 minicodex add <email>");
   const current = state.active || state.cursor || state.lastUsed || state.order[0];
   const start = Math.max(0, state.order.indexOf(current));
   for (let offset = 1; offset <= state.order.length; offset += 1) {
     const index = (start + direction * offset + state.order.length) % state.order.length;
     const name = state.order[index];
     const profile = state.profiles[name];
-    if (!profile || profile.status === "disabled") continue;
+    if (!profile) continue;
     state.active = name;
     state.cursor = name;
     state.autoSwitch = false;
@@ -1566,45 +1444,6 @@ function cmdSetEmail(args) {
   profile.updatedAt = nowIso();
   saveState(state);
   console.log(`已更新 ${name} 邮箱`);
-}
-
-function cmdMark(args) {
-  const [name, status, resetAt = null] = args;
-  if (!STATUSES.has(status)) abort(`状态必须是：${[...STATUSES].join(", ")}`);
-  const state = loadState();
-  const profile = ensureProfile(state, name);
-  profile.status = status;
-  profile.lastError = status === "limited" ? "usage_limit" : status === "invalid_auth" ? "refresh_token_invalid" : null;
-  profile.resetAt = status === "limited" ? resetAt : null;
-  profile.updatedAt = nowIso();
-  saveState(state);
-  console.log(`已标记 ${name}: ${status}`);
-}
-
-function cmdDisable(args) {
-  const [name] = args;
-  if (!name) abort("用法：minicodex disable <name>");
-  const state = loadState();
-  const profile = ensureProfile(state, name);
-  profile.status = "disabled";
-  profile.lastError = null;
-  profile.resetAt = null;
-  profile.updatedAt = nowIso();
-  saveState(state);
-  console.log(`已禁用 ${name}`);
-}
-
-function cmdEnable(args) {
-  const [name] = args;
-  if (!name) abort("用法：minicodex enable <name>");
-  const state = loadState();
-  const profile = ensureProfile(state, name);
-  profile.status = "unknown";
-  profile.lastError = null;
-  profile.resetAt = null;
-  profile.updatedAt = nowIso();
-  saveState(state);
-  console.log(`已启用 ${name}`);
 }
 
 function cmdShared(key, args) {
@@ -1637,160 +1476,13 @@ function cmdFallback(args = []) {
   console.log(`fallback=${mode}`);
 }
 
-function parseCheckBaseArgs(args) {
-  const options = {
-    live: false,
-    all: false,
-    max: 1,
-    model: DEFAULT_PROBE_MODEL,
-    prompt: "只输出数字 1",
-    fresh: false,
-    timeoutMs: DEFAULT_LIVE_PROBE_TIMEOUT_MS,
-    names: [],
-  };
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (arg === "--live") options.live = true;
-    else if (arg === "--all") options.all = true;
-    else if (arg === "--max") options.max = Number.parseInt(args[++i] ?? "1", 10);
-    else if (arg === "-m" || arg === "--model") options.model = args[++i] ?? options.model;
-    else if (arg === "--prompt") options.prompt = args[++i] ?? options.prompt;
-    else if (arg === "--fresh") {
-      options.fresh = true;
-    }
-    else if (arg === "--timeout-ms") options.timeoutMs = Number.parseInt(args[++i] ?? String(options.timeoutMs), 10);
-    else if (arg.startsWith("--")) abort(`未知 check 参数：${arg}`);
-    else options.names.push(arg);
-  }
-  if (!Number.isFinite(options.max) || options.max <= 0) options.max = 1;
-  if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) options.timeoutMs = DEFAULT_LIVE_PROBE_TIMEOUT_MS;
-  return options;
-}
-
-function resolveCheckNames(state, options) {
-  if (options.names.length > 0) {
-    for (const name of options.names) ensureProfile(state, name);
-    return options.names;
-  }
-  if (options.all) return state.order;
-  const picked = pickProfile(state);
-  return picked ? [picked.name] : [];
-}
-
-function parseCheckArgs(args) {
-  const options = parseCheckBaseArgs(args);
-  options.sinceMinutes = 180;
-  const names = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (arg === "--since-min") {
-      options.sinceMinutes = Number.parseInt(args[++i] ?? "180", 10);
-    } else if (arg === "--max" || arg === "-m" || arg === "--model" || arg === "--prompt" || arg === "--timeout-ms") {
-      i += 1;
-    } else if (arg === "--live" || arg === "--all" || arg === "--fresh") {
-      // 已由 parseCheckBaseArgs 处理。
-    } else if (arg.startsWith("--")) {
-      abort(`未知 check 参数：${arg}`);
-    } else {
-      names.push(arg);
-    }
-  }
-  options.names = names;
-  if (!Number.isFinite(options.sinceMinutes) || options.sinceMinutes <= 0) options.sinceMinutes = 180;
-  return options;
-}
-
-function liveProbeArgs(profile, options) {
-  const sessionId = !options.fresh ? profile.probeSessionId : null;
-  if (sessionId) {
-    const args = ["exec", "resume", "-m", options.model, "--skip-git-repo-check"];
-    args.push(sessionId);
-    args.push(options.prompt);
-    return args;
-  }
-  return ["exec", "-m", options.model, "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never", "--", options.prompt];
-}
-
-function extractSessionId(output) {
-  const text = String(output || "");
-  const jsonMatch = text.match(/"session_id"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/i);
-  if (jsonMatch) return jsonMatch[1];
-  const textMatch = text.match(/session id:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-  return textMatch ? textMatch[1] : null;
-}
-
-async function cmdCheck(args) {
-  const options = parseCheckArgs(args);
-  const state = loadState();
-  const limit = options.names.length > 0 || options.all ? state.order.length : options.max;
-  const names = resolveCheckNames(state, options).slice(0, limit);
-  if (names.length === 0) abort("没有可检查账号");
-  const sinceMs = Date.now() - options.sinceMinutes * 60_000;
-
-  for (const name of names) {
-    const profile = state.profiles[name];
-    const email = profile.email ? ` <${profile.email}>` : "";
-    const local = inspectLocalProfile(profile);
-    const findings = scanProfileArtifacts(profile, state, { sinceMs, scanSessions: names.length === 1 });
-    applyScanFindings(profile, findings);
-    const reasonText = local.reasons.length ? local.reasons.join(",") : "ok";
-    const quota = profile.lastQuota;
-    const quotaText = quota && typeof quota.usedPercent === "number" ? ` quota=${quota.usedPercent}% reset=${quota.resetAt ?? "-"}` : "";
-    const failureText = findings.failure ? ` failure=${findings.failure.type}` : "";
-    console.log(`${name}${email}: local=${local.ok ? "ok" : "warn"} status=${profile.status}${quotaText}${failureText} refresh=${formatAge(local.lastRefresh)} models=${local.modelCount} cache=${formatAge(local.modelCacheAt)} reason=${reasonText}`);
-
-    if (!options.live) continue;
-    const codexBin = resolveRealCodex(state);
-    const result = await runCodexOnceWithTimeout(
-      codexBin,
-      profile,
-      liveProbeArgs(profile, options),
-      options.timeoutMs,
-    );
-    const failure = detectFailure(result.output);
-    if (result.code === 0) {
-      const sessionId = extractSessionId(result.output);
-      if (sessionId) {
-        profile.probeSessionId = sessionId;
-        profile.probeSessionAt = nowIso();
-      }
-      profile.status = "ready";
-      profile.lastError = null;
-      profile.resetAt = null;
-      profile.lastSuccessAt = nowIso();
-      profile.updatedAt = nowIso();
-      state.active = name;
-      state.cursor = name;
-      state.lastUsed = name;
-      console.log(`${name}${email}: live=ready${profile.probeSessionId ? ` probe=${profile.probeSessionId}` : ""}`);
-    } else if (failure?.type === "usage_limit") {
-      profile.status = "limited";
-      profile.lastError = "usage_limit";
-      profile.resetAt = failure.resetAt ?? profile.resetAt ?? null;
-      profile.updatedAt = nowIso();
-      console.log(`${name}${email}: live=limited${profile.resetAt ? ` reset=${profile.resetAt}` : ""}`);
-    } else if (failure?.type === "refresh_token_invalid") {
-      profile.status = "invalid_auth";
-      profile.lastError = "refresh_token_invalid";
-      profile.updatedAt = nowIso();
-      console.log(`${name}${email}: live=invalid_auth`);
-    } else {
-      profile.lastError = "codex_error";
-      profile.updatedAt = nowIso();
-      const short = result.output.replace(/\s+/g, " ").trim().slice(-180);
-      console.log(`${name}${email}: live=error code=${result.code}${short ? ` msg=${short}` : ""}`);
-    }
-  }
-  saveState(state);
-}
-
 async function cmdLogin(args) {
   const first = args[0] ?? "";
   const hasName = first.length > 0 && !first.startsWith("-");
   const name = hasName ? first : "";
   const state = loadState();
   const targetName = name || state.active || state.cursor;
-  if (!targetName) abort("还没有当前账号。先运行 minicodex add/new/use");
+  if (!targetName) abort("还没有当前账号。先运行 minicodex add/use");
   const profile = ensureProfile(state, targetName);
   const codexBin = resolveRealCodex(state);
   const passArgs = args.slice(hasName ? 1 : 0);
@@ -1816,7 +1508,7 @@ async function cmdLogout(args) {
   const name = hasName ? first : "";
   const state = loadState();
   const targetName = name || state.active || state.cursor;
-  if (!targetName) abort("还没有当前账号。先运行 minicodex add/new/use");
+  if (!targetName) abort("还没有当前账号。先运行 minicodex add/use");
   const profile = ensureProfile(state, targetName);
   const codexBin = resolveRealCodex(state);
   const passArgs = args.slice(hasName ? 1 : 0);
@@ -1925,19 +1617,13 @@ function printHelp() {
   console.log(`minicodex ${VERSION}
 
 用法:
-  minicodex new <name> [home]
   minicodex add <email>
-  minicodex add <name> [CODEX_HOME] [email]
   minicodex status
   minicodex use <name>
   minicodex next
   minicodex prev
   minicodex fallback on|off
   minicodex email <name> <email>
-  minicodex disable <name>
-  minicodex enable <name>
-  minicodex mark <name> <ready|unknown|limited|invalid_auth|disabled> [resetAt]
-  minicodex check [name...] [--all] [--since-min N] [--live] [--fresh] [--max N] [-m model]
   minicodex on|off
   minicodex setup
   minicodex login [name] [codex login args...]
@@ -1976,13 +1662,9 @@ async function main() {
   const cmd = rawArgs[0] ?? "";
   const args = rawArgs.slice(1);
   switch (cmd) {
-    case "new":
-      cmdNew(args);
-      break;
     case "add":
       cmdAdd(args);
       break;
-    case "list":
     case "status":
       cmdStatus(args);
       break;
@@ -2000,18 +1682,6 @@ async function main() {
       break;
     case "email":
       cmdSetEmail(args);
-      break;
-    case "mark":
-      cmdMark(args);
-      break;
-    case "disable":
-      cmdDisable(args);
-      break;
-    case "enable":
-      cmdEnable(args);
-      break;
-    case "check":
-      await cmdCheck(args);
       break;
     case "on":
       cmdTakeover("on");
